@@ -8503,7 +8503,6 @@ def render_sidebar_menu(role):
             if not menu_options:
                 menu_options = filtered_flat
             selected = st.radio("メニュー", menu_options, key=f"main_menu_staff_{category}")
-            ui_badges(["大ボタン", "タッチ操作", "押し間違い防止"])
             return selected
         category_names = list(groups.keys())
         default_category = st.session_state.get("main_menu_category", category_names[0])
@@ -8517,8 +8516,6 @@ def render_sidebar_menu(role):
         menu_index = menu_options.index(previous_menu) if previous_menu in menu_options else 0
         selected = st.radio("メニュー", menu_options, index=menu_index, key=f"main_menu_selected_{category}")
         st.session_state["main_menu_selected"] = selected
-        st.divider()
-        ui_badges(["Ver3.5", "大ボタン", "カードUI", "押し間違い防止"])
         return selected
 
 
