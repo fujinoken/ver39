@@ -7959,7 +7959,10 @@ def render_sidebar_menu(role):
         selected = st.radio("メニュー", menu_options, index=menu_index, key=f"main_menu_selected_{category}")
         st.session_state["main_menu_selected"] = selected
         st.divider()
-        ui_badges(["Ver3.5", "大ボタン", "カードUI", "押し間違い防止"])
+        # Ver3.5 / 大ボタン / カードUI / 押し間違い防止 の表示は、
+        # 現場画面をすっきりさせるため非表示にしました。
+        # 必要になった場合は、下の行のコメントを外してください。
+        # ui_badges(["Ver3.5", "大ボタン", "カードUI", "押し間違い防止"])
         return selected
 
 
