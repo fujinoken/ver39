@@ -7914,7 +7914,7 @@ def show_menu_category_settings_menu():
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("自己設定を保存", type="primary", use_container_width=True):
+        if st.button("自分設定を保存", type="primary", use_container_width=True):
             save_menu_category_settings(edited, role=role_key)
             st.success("メニューカテゴリ設定を保存しました。左メニューに反映します。")
             st.rerun()
@@ -8151,6 +8151,13 @@ def apply_product_ui_ux():
             box-shadow: none !important;
             border: 1px solid #E7E1D8 !important;
             background: #FFFFFF !important;
+            color: #3D463D !important;
+        }
+        div[data-testid="stButton"] button[kind="primary"],
+        div[data-testid="stButton"] button[kind="secondary"],
+        button[kind="primary"],
+        button[kind="secondary"] {
+            color: #3D463D !important;
         }
         div[data-testid="stButton"] button:focus,
         div[data-testid="stDownloadButton"] button:focus,
@@ -8994,7 +9001,7 @@ def show_custom_dashboard_settings():
     c1, c2 = st.columns(2)
 
     with c1:
-        if st.button("設定を保存", use_container_width=True):
+        if st.button("自分設定を保存", type="primary", use_container_width=True):
             save_dashboard_settings(username, enabled_items)
             st.session_state["dashboard_settings_saved"] = True
             st.session_state["dashboard_enabled_items"] = enabled_items
