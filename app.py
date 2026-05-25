@@ -7723,7 +7723,7 @@ def logout_button():
 # =========================
 # Ver3.0 UI共通設定・共通部品
 # =========================
-APP_VERSION = "Ver4.1 利用者名ゆれ紐づけマスタ版"
+APP_VERSION = "Ver4.4 全メニュー選択プルダウン版"
 APP_COPY = "押し間違えず、迷わず、観察して次につなぐ 現場OS"
 
 UI_COLORS = {
@@ -8490,7 +8490,7 @@ def flatten_menu_groups(groups):
 
 
 def render_sidebar_menu(role):
-    """Ver3.0メニュー。カテゴリ選択＋メニュー項目選択＋従来メニューでiPadでも迷いにくくする。"""
+    """Ver4.4メニュー。左の従来メニューは残しつつ、メニュー項目プルダウンは全メニューから選択できるようにする。"""
     groups = build_menu_groups_from_settings(role)
     filtered_flat = filter_admin_menus(flatten_menu_groups(groups))
 
@@ -8501,11 +8501,22 @@ def render_sidebar_menu(role):
                 names.append(cat)
         return names
 
+    def find_category_by_menu(menu_name):
+        """選択されたメニューが属するカテゴリを探す。次回表示時のカテゴリ同期に使う。"""
+        for cat, menus in groups.items():
+            if menu_name in menus:
+                return cat
+        return ""
+
     def render_category_and_menu(category_key, select_key_prefix, radio_key_prefix, default_category_name):
         category_names = available_categories(groups)
         if not category_names:
             category_names = [default_category_name]
             groups[default_category_name] = filtered_flat
+
+        if not filtered_flat:
+            st.warning("表示できるメニューがありません。")
+            return ""
 
         default_category = st.session_state.get(category_key, category_names[0])
         if default_category not in category_names:
@@ -8521,33 +8532,62 @@ def render_sidebar_menu(role):
         menu_options = [m for m in groups.get(category, []) if m in filtered_flat]
         if not menu_options:
             menu_options = filtered_flat
-        if not menu_options:
-            st.warning("表示できるメニューがありません。")
-            return ""
 
-        previous_menu = st.session_state.get("main_menu_selected", menu_options[0])
-        if previous_menu not in menu_options:
-            previous_menu = menu_options[0]
-        previous_index = menu_options.index(previous_menu)
+        previous_menu = st.session_state.get("main_menu_selected", filtered_flat[0])
+        if previous_menu not in filtered_flat:
+            previous_menu = filtered_flat[0]
 
-        # 新機能：カテゴリ選択の下に、同じ形式でメニュー項目を選べるプルダウンを追加。
-        # その下の従来メニュー（radio）は残すので、押し慣れた操作もそのまま使える。
+        # 追加仕様：カテゴリ選択の下の「メニュー項目」プルダウンは、カテゴリ内だけでなく全メニューから選択できる。
+        # 従来のカテゴリ内ラジオメニューも残すため、タッチ操作に慣れた使い方もそのまま維持する。
+        all_select_key = f"{select_key_prefix}_all"
+        radio_key = f"{radio_key_prefix}_{category}"
+        last_select_key = f"{all_select_key}_last_value"
+        last_radio_key = f"{radio_key}_last_value"
+
         selected_from_select = st.selectbox(
             "メニュー項目",
-            menu_options,
-            index=previous_index,
-            key=f"{select_key_prefix}_{category}",
-            help="カテゴリ内の機能をプルダウンで選べます。下の従来メニューもそのまま使えます。",
+            filtered_flat,
+            index=filtered_flat.index(previous_menu),
+            key=all_select_key,
+            help="全メニューから直接選べます。下の従来メニューもそのまま使えます。",
         )
-        select_index = menu_options.index(selected_from_select) if selected_from_select in menu_options else 0
 
-        selected = st.radio(
+        radio_default = previous_menu if previous_menu in menu_options else menu_options[0]
+        selected_from_radio = st.radio(
             "メニュー",
             menu_options,
-            index=select_index,
-            key=f"{radio_key_prefix}_{category}",
+            index=menu_options.index(radio_default),
+            key=radio_key,
         )
+
+        # どちらの部品が今回変更されたかを見て、最後に操作した方を優先する。
+        # selectboxで別カテゴリのメニューを選んだ場合も、radioの初期値に戻されないようにする。
+        last_select_value = st.session_state.get(last_select_key, selected_from_select)
+        last_radio_value = st.session_state.get(last_radio_key, selected_from_radio)
+        select_changed = selected_from_select != last_select_value
+        radio_changed = selected_from_radio != last_radio_value
+
+        if select_changed and not radio_changed:
+            selected = selected_from_select
+        elif radio_changed and not select_changed:
+            selected = selected_from_radio
+        elif select_changed and radio_changed:
+            # 同時に変わった場合は、全メニューから選べるプルダウンを優先する。
+            selected = selected_from_select
+        else:
+            selected = previous_menu
+            if selected not in filtered_flat:
+                selected = selected_from_select
+
+        st.session_state[last_select_key] = selected_from_select
+        st.session_state[last_radio_key] = selected_from_radio
         st.session_state["main_menu_selected"] = selected
+
+        # 全メニュー選択で別カテゴリへ移った場合、次回の再描画でカテゴリ欄も自然に追従する。
+        selected_category = find_category_by_menu(selected)
+        if selected_category and selected_category in category_names and selected_category != category:
+            st.session_state[category_key] = selected_category
+
         return selected
 
     with st.sidebar:
