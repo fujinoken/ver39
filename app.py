@@ -7723,7 +7723,7 @@ def logout_button():
 # =========================
 # Ver3.0 UI共通設定・共通部品
 # =========================
-APP_VERSION = "Ver4.4 全メニュー選択プルダウン版"
+APP_VERSION = "Ver4.1 利用者名ゆれ紐づけマスタ版"
 APP_COPY = "押し間違えず、迷わず、観察して次につなぐ 現場OS"
 
 UI_COLORS = {
@@ -7914,7 +7914,7 @@ def show_menu_category_settings_menu():
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("自分設定を保存", type="primary", use_container_width=True):
+        if st.button("自己設定を保存", type="primary", use_container_width=True):
             save_menu_category_settings(edited, role=role_key)
             st.success("メニューカテゴリ設定を保存しました。左メニューに反映します。")
             st.rerun()
@@ -8151,13 +8151,6 @@ def apply_product_ui_ux():
             box-shadow: none !important;
             border: 1px solid #E7E1D8 !important;
             background: #FFFFFF !important;
-            color: #3D463D !important;
-        }
-        div[data-testid="stButton"] button[kind="primary"],
-        div[data-testid="stButton"] button[kind="secondary"],
-        button[kind="primary"],
-        button[kind="secondary"] {
-            color: #3D463D !important;
         }
         div[data-testid="stButton"] button:focus,
         div[data-testid="stDownloadButton"] button:focus,
@@ -8490,123 +8483,43 @@ def flatten_menu_groups(groups):
 
 
 def render_sidebar_menu(role):
-    """Ver4.4メニュー。左の従来メニューは残しつつ、メニュー項目プルダウンは全メニューから選択できるようにする。"""
+    """Ver3.0メニュー。カテゴリ選択＋メニュー選択でiPadでも迷いにくくする。"""
     groups = build_menu_groups_from_settings(role)
     filtered_flat = filter_admin_menus(flatten_menu_groups(groups))
-
-    def available_categories(source_groups):
-        names = []
-        for cat, menus in source_groups.items():
-            if [m for m in menus if m in filtered_flat]:
-                names.append(cat)
-        return names
-
-    def find_category_by_menu(menu_name):
-        """選択されたメニューが属するカテゴリを探す。次回表示時のカテゴリ同期に使う。"""
-        for cat, menus in groups.items():
-            if menu_name in menus:
-                return cat
-        return ""
-
-    def render_category_and_menu(category_key, select_key_prefix, radio_key_prefix, default_category_name):
-        category_names = available_categories(groups)
-        if not category_names:
-            category_names = [default_category_name]
-            groups[default_category_name] = filtered_flat
-
-        if not filtered_flat:
-            st.warning("表示できるメニューがありません。")
-            return ""
-
-        default_category = st.session_state.get(category_key, category_names[0])
-        if default_category not in category_names:
-            default_category = category_names[0]
-
-        category = st.selectbox(
-            "カテゴリ",
-            category_names,
-            index=category_names.index(default_category),
-            key=category_key,
-        )
-
-        menu_options = [m for m in groups.get(category, []) if m in filtered_flat]
-        if not menu_options:
-            menu_options = filtered_flat
-
-        previous_menu = st.session_state.get("main_menu_selected", filtered_flat[0])
-        if previous_menu not in filtered_flat:
-            previous_menu = filtered_flat[0]
-
-        # 追加仕様：カテゴリ選択の下の「メニュー項目」プルダウンは、カテゴリ内だけでなく全メニューから選択できる。
-        # 従来のカテゴリ内ラジオメニューも残すため、タッチ操作に慣れた使い方もそのまま維持する。
-        all_select_key = f"{select_key_prefix}_all"
-        radio_key = f"{radio_key_prefix}_{category}"
-        last_select_key = f"{all_select_key}_last_value"
-        last_radio_key = f"{radio_key}_last_value"
-
-        selected_from_select = st.selectbox(
-            "メニュー項目",
-            filtered_flat,
-            index=filtered_flat.index(previous_menu),
-            key=all_select_key,
-            help="全メニューから直接選べます。下の従来メニューもそのまま使えます。",
-        )
-
-        radio_default = previous_menu if previous_menu in menu_options else menu_options[0]
-        selected_from_radio = st.radio(
-            "メニュー",
-            menu_options,
-            index=menu_options.index(radio_default),
-            key=radio_key,
-        )
-
-        # どちらの部品が今回変更されたかを見て、最後に操作した方を優先する。
-        # selectboxで別カテゴリのメニューを選んだ場合も、radioの初期値に戻されないようにする。
-        last_select_value = st.session_state.get(last_select_key, selected_from_select)
-        last_radio_value = st.session_state.get(last_radio_key, selected_from_radio)
-        select_changed = selected_from_select != last_select_value
-        radio_changed = selected_from_radio != last_radio_value
-
-        if select_changed and not radio_changed:
-            selected = selected_from_select
-        elif radio_changed and not select_changed:
-            selected = selected_from_radio
-        elif select_changed and radio_changed:
-            # 同時に変わった場合は、全メニューから選べるプルダウンを優先する。
-            selected = selected_from_select
-        else:
-            selected = previous_menu
-            if selected not in filtered_flat:
-                selected = selected_from_select
-
-        st.session_state[last_select_key] = selected_from_select
-        st.session_state[last_radio_key] = selected_from_radio
-        st.session_state["main_menu_selected"] = selected
-
-        # 全メニュー選択で別カテゴリへ移った場合、次回の再描画でカテゴリ欄も自然に追従する。
-        selected_category = find_category_by_menu(selected)
-        if selected_category and selected_category in category_names and selected_category != category:
-            st.session_state[category_key] = selected_category
-
-        return selected
-
     with st.sidebar:
         st.markdown(f'<div class="sidebar-title">ひだまり</div><div class="sidebar-sub">{APP_VERSION}<br>{APP_COPY}</div>', unsafe_allow_html=True)
         st.caption(f"ログイン：{st.session_state.get('user_label', '')}")
         st.divider()
         if role != "admin":
-            return render_category_and_menu(
-                category_key="main_menu_category_staff",
-                select_key_prefix="main_menu_item_select_staff",
-                radio_key_prefix="main_menu_staff",
-                default_category_name="今日の入力",
-            )
-        return render_category_and_menu(
-            category_key="main_menu_category",
-            select_key_prefix="main_menu_item_select_admin",
-            radio_key_prefix="main_menu_selected_admin",
-            default_category_name="朝の確認",
-        )
+            category_names = list(groups.keys())
+            if not category_names:
+                category_names = ["今日の入力"]
+                groups = {"今日の入力": filtered_flat}
+            default_category = st.session_state.get("main_menu_category_staff", category_names[0])
+            if default_category not in category_names:
+                default_category = category_names[0]
+            category = st.selectbox("カテゴリ", category_names, index=category_names.index(default_category), key="main_menu_category_staff")
+            menu_options = [m for m in groups.get(category, []) if m in filtered_flat]
+            if not menu_options:
+                menu_options = filtered_flat
+            selected = st.radio("メニュー", menu_options, key=f"main_menu_staff_{category}")
+            ui_badges(["大ボタン", "タッチ操作", "押し間違い防止"])
+            return selected
+        category_names = list(groups.keys())
+        default_category = st.session_state.get("main_menu_category", category_names[0])
+        if default_category not in category_names:
+            default_category = category_names[0]
+        category = st.selectbox("カテゴリ", category_names, index=category_names.index(default_category), key="main_menu_category")
+        menu_options = [m for m in groups.get(category, []) if m in filtered_flat]
+        if not menu_options:
+            menu_options = filtered_flat
+        previous_menu = st.session_state.get("main_menu_selected", menu_options[0])
+        menu_index = menu_options.index(previous_menu) if previous_menu in menu_options else 0
+        selected = st.radio("メニュー", menu_options, index=menu_index, key=f"main_menu_selected_{category}")
+        st.session_state["main_menu_selected"] = selected
+        st.divider()
+        ui_badges(["Ver3.5", "大ボタン", "カードUI", "押し間違い防止"])
+        return selected
 
 
 apply_design()
@@ -9084,7 +8997,7 @@ def show_custom_dashboard_settings():
     c1, c2 = st.columns(2)
 
     with c1:
-        if st.button("自分設定を保存", type="primary", use_container_width=True):
+        if st.button("設定を保存", use_container_width=True):
             save_dashboard_settings(username, enabled_items)
             st.session_state["dashboard_settings_saved"] = True
             st.session_state["dashboard_enabled_items"] = enabled_items
