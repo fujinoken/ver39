@@ -8490,40 +8490,83 @@ def flatten_menu_groups(groups):
 
 
 def render_sidebar_menu(role):
-    """Ver3.0メニュー。カテゴリ選択＋メニュー選択でiPadでも迷いにくくする。"""
+    """Ver3.0メニュー。カテゴリ選択＋メニュー項目選択＋従来メニューでiPadでも迷いにくくする。"""
     groups = build_menu_groups_from_settings(role)
     filtered_flat = filter_admin_menus(flatten_menu_groups(groups))
+
+    def available_categories(source_groups):
+        names = []
+        for cat, menus in source_groups.items():
+            if [m for m in menus if m in filtered_flat]:
+                names.append(cat)
+        return names
+
+    def render_category_and_menu(category_key, select_key_prefix, radio_key_prefix, default_category_name):
+        category_names = available_categories(groups)
+        if not category_names:
+            category_names = [default_category_name]
+            groups[default_category_name] = filtered_flat
+
+        default_category = st.session_state.get(category_key, category_names[0])
+        if default_category not in category_names:
+            default_category = category_names[0]
+
+        category = st.selectbox(
+            "カテゴリ",
+            category_names,
+            index=category_names.index(default_category),
+            key=category_key,
+        )
+
+        menu_options = [m for m in groups.get(category, []) if m in filtered_flat]
+        if not menu_options:
+            menu_options = filtered_flat
+        if not menu_options:
+            st.warning("表示できるメニューがありません。")
+            return ""
+
+        previous_menu = st.session_state.get("main_menu_selected", menu_options[0])
+        if previous_menu not in menu_options:
+            previous_menu = menu_options[0]
+        previous_index = menu_options.index(previous_menu)
+
+        # 新機能：カテゴリ選択の下に、同じ形式でメニュー項目を選べるプルダウンを追加。
+        # その下の従来メニュー（radio）は残すので、押し慣れた操作もそのまま使える。
+        selected_from_select = st.selectbox(
+            "メニュー項目",
+            menu_options,
+            index=previous_index,
+            key=f"{select_key_prefix}_{category}",
+            help="カテゴリ内の機能をプルダウンで選べます。下の従来メニューもそのまま使えます。",
+        )
+        select_index = menu_options.index(selected_from_select) if selected_from_select in menu_options else 0
+
+        selected = st.radio(
+            "メニュー",
+            menu_options,
+            index=select_index,
+            key=f"{radio_key_prefix}_{category}",
+        )
+        st.session_state["main_menu_selected"] = selected
+        return selected
+
     with st.sidebar:
         st.markdown(f'<div class="sidebar-title">ひだまり</div><div class="sidebar-sub">{APP_VERSION}<br>{APP_COPY}</div>', unsafe_allow_html=True)
         st.caption(f"ログイン：{st.session_state.get('user_label', '')}")
         st.divider()
         if role != "admin":
-            category_names = list(groups.keys())
-            if not category_names:
-                category_names = ["今日の入力"]
-                groups = {"今日の入力": filtered_flat}
-            default_category = st.session_state.get("main_menu_category_staff", category_names[0])
-            if default_category not in category_names:
-                default_category = category_names[0]
-            category = st.selectbox("カテゴリ", category_names, index=category_names.index(default_category), key="main_menu_category_staff")
-            menu_options = [m for m in groups.get(category, []) if m in filtered_flat]
-            if not menu_options:
-                menu_options = filtered_flat
-            selected = st.radio("メニュー", menu_options, key=f"main_menu_staff_{category}")
-            return selected
-        category_names = list(groups.keys())
-        default_category = st.session_state.get("main_menu_category", category_names[0])
-        if default_category not in category_names:
-            default_category = category_names[0]
-        category = st.selectbox("カテゴリ", category_names, index=category_names.index(default_category), key="main_menu_category")
-        menu_options = [m for m in groups.get(category, []) if m in filtered_flat]
-        if not menu_options:
-            menu_options = filtered_flat
-        previous_menu = st.session_state.get("main_menu_selected", menu_options[0])
-        menu_index = menu_options.index(previous_menu) if previous_menu in menu_options else 0
-        selected = st.radio("メニュー", menu_options, index=menu_index, key=f"main_menu_selected_{category}")
-        st.session_state["main_menu_selected"] = selected
-        return selected
+            return render_category_and_menu(
+                category_key="main_menu_category_staff",
+                select_key_prefix="main_menu_item_select_staff",
+                radio_key_prefix="main_menu_staff",
+                default_category_name="今日の入力",
+            )
+        return render_category_and_menu(
+            category_key="main_menu_category",
+            select_key_prefix="main_menu_item_select_admin",
+            radio_key_prefix="main_menu_selected_admin",
+            default_category_name="朝の確認",
+        )
 
 
 apply_design()
