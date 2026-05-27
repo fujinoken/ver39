@@ -9330,12 +9330,7 @@ def apply_product_ui_ux():
     )
 
 def product_ui_notice():
-    """商品化UIの短い案内。画面冒頭で必要に応じて使う。"""
-    st.markdown(
-        '<div class="safe-note"><strong></strong></div>',
-        unsafe_allow_html=True,
-    )
-
+   
 
 def danger_note(text):
     """削除・復元などの危険操作用の共通表示。"""
