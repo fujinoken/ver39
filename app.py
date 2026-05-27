@@ -5569,9 +5569,16 @@ def show_business_handover_menu():
     show_observation_perspective("handover")
     st.caption("利用者個別ではなく、施設全体の出来事・注意点・次の勤務者に共有したい内容を記録します。")
 
-    tab_input, tab_manage, tab_schedule, tab_condition = st.tabs(["新規登録", "検索・更新・削除", "予定候補抽出・出力", "異常検知条件設定"])
+    # Ver5.0.1 修正：st.tabs だと環境やCSSの影響で「選択しても画面が動かない」ことがあるため、
+    # 確実に再描画される radio 方式に変更。
+    handover_mode = st.radio(
+        "表示する機能",
+        ["新規登録", "検索・更新・削除", "予定候補抽出・出力", "異常検知条件設定"],
+        horizontal=True,
+        key="business_handover_mode_radio",
+    )
 
-    with tab_input:
+    if handover_mode == "新規登録":
         df = load_business_handover_data()
 
         # 先に本日の申し送りを表示し、その下に対応中案件、その下に入力欄を置く
@@ -5699,7 +5706,7 @@ def show_business_handover_menu():
             st.success("業務全体申し送りを保存しました。")
             st.rerun()
 
-    with tab_manage:
+    if handover_mode == "検索・更新・削除":
         st.subheader("業務全体申し送りの検索")
         df = load_business_handover_data()
 
@@ -5965,10 +5972,10 @@ def show_business_handover_menu():
                 st.success("業務全体申し送りを削除しました。")
                 st.rerun()
 
-    with tab_schedule:
+    if handover_mode == "予定候補抽出・出力":
         show_handover_schedule_export_menu()
 
-    with tab_condition:
+    if handover_mode == "異常検知条件設定":
         show_alert_condition_master_menu()
 
 def show_admin_business_handover_summary(target_date):
