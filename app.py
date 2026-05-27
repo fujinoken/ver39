@@ -6091,7 +6091,7 @@ def render_business_handover_card(row):
 def show_business_handover_menu():
     st.header("業務全体申し送り")
     show_observation_perspective("handover")
-    st.caption("利用者個別ではなく、施設全体の出来事・注意点・次の勤務者に共有したい内容を記録します。")
+    st.caption("施設全体の出来事・注意点・次の勤務者に共有したい内容を記録します。")
 
     # Ver5.0.1 修正：st.tabs だと環境やCSSの影響で「選択しても画面が動かない」ことがあるため、
     # 確実に再描画される radio 方式に変更。
