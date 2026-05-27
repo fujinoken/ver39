@@ -1017,6 +1017,9 @@ BUSINESS_HANDOVER_COLUMNS = [
     "日付",
     "勤務帯",
     "記入者",
+    "対象区分",
+    "user_id",
+    "利用者名",
     "全体申し送り",
     "要確認事項",
     "優先度",
@@ -1417,6 +1420,53 @@ def get_user_name_by_id(user_id: str) -> str:
     except Exception:
         pass
     return ""
+
+def build_handover_target_options():
+    """業務全体申し送り用の対象選択肢を作る。先頭は施設全体の申し送り。"""
+    options = ["業務全般"]
+    try:
+        users = load_users(include_hidden=False)
+        if not users.empty:
+            for _, row in users.iterrows():
+                name = clean_text(row.get("利用者名"))
+                uid = clean_text(row.get("user_id"))
+                if name:
+                    options.append(f"{name}（ID:{uid}）" if uid else name)
+    except Exception:
+        pass
+    return options
+
+
+def resolve_handover_target(selection_text: str) -> tuple[str, str, str]:
+    """対象選択肢から 対象区分・user_id・利用者名 を返す。"""
+    value = clean_text(selection_text, "業務全般")
+    if value == "業務全般":
+        return "業務全般", "", "業務全般"
+
+    # 「山田様（ID:usr_xxx）」形式からIDを拾う
+    m = re.search(r"（ID:(.*?)）", value)
+    user_id = clean_text(m.group(1)) if m else ""
+    user_name = re.sub(r"（ID:.*?）", "", value).strip()
+
+    if not user_id and user_name:
+        user_id = get_user_id_by_name(user_name)
+    if not user_name and user_id:
+        user_name = get_user_name_by_id(user_id)
+
+    return "利用者", user_id, user_name
+
+
+def make_handover_target_label(user_id: str, user_name: str, target_type: str = "") -> str:
+    """保存済みの対象情報から画面用ラベルを作る。"""
+    target_type = clean_text(target_type)
+    user_id = clean_text(user_id)
+    user_name = clean_text(user_name)
+    if target_type == "業務全般" or (not user_id and (not user_name or user_name == "業務全般")):
+        return "業務全般"
+    if user_name and user_id:
+        return f"{user_name}（ID:{user_id}）"
+    return user_name or "業務全般"
+
 
 
 def apply_user_id_migration_preview():
@@ -4407,7 +4457,9 @@ def load_business_handover_data():
 
     if not df.empty:
         df["日付"] = pd.to_datetime(df["日付"], errors="coerce")
-        for col in ["記録ID", "勤務帯", "記入者", "全体申し送り", "要確認事項", "優先度", "対応状況", "写真1", "写真2", "Excel自動抽出情報", "入力Excelファイル", "入力Excel表示情報", "記録日時"]:
+        for col in ["記録ID", "勤務帯", "記入者", "対象区分", "user_id", "利用者名", "全体申し送り", "要確認事項", "優先度", "対応状況", "写真1", "写真2", "Excel自動抽出情報", "入力Excelファイル", "入力Excel表示情報", "記録日時"]:
+            if col not in df.columns:
+                df[col] = ""
             df[col] = df[col].fillna("").astype(str)
 
     return df.astype("object")
@@ -5143,6 +5195,7 @@ SCHEDULE_EXPORT_COLUMNS = [
     "勤務帯",
     "利用者",
     "利用者名",
+    "user_id",
     "キーワード",
     "分類",
     "タイトル",
@@ -5180,6 +5233,7 @@ HIDAMARI_SCHEDULE_COLUMNS = [
     "開始時刻",
     "終了時刻",
     "終日",
+    "user_id",
     "利用者名",
     "分類",
     "タイトル",
@@ -5260,6 +5314,10 @@ def apply_datetime_display_to_schedule_row(row: pd.Series) -> dict:
     # 表示用の編集列を正式列へ同期
     data["取込対象"] = bool(data.get("登録する", data.get("取込対象", True)))
     data["利用者名"] = clean_text(data.get("利用者"), clean_text(data.get("利用者名")))
+    if data["利用者名"] == "業務全般":
+        data["user_id"] = ""
+    elif not clean_text(data.get("user_id")) and data["利用者名"]:
+        data["user_id"] = get_user_id_by_name(data["利用者名"])
     data["件名"] = clean_text(data.get("タイトル"), clean_text(data.get("件名"), "予定"))
     data["内容"] = clean_text(data.get("詳細"), clean_text(data.get("内容")))
     return data
@@ -5313,6 +5371,7 @@ def register_schedules_to_hidamari(candidate_df: pd.DataFrame) -> tuple[int, int
             "開始時刻": clean_text(row.get("開始時刻")),
             "終了時刻": clean_text(row.get("終了時刻")),
             "終日": clean_text(row.get("終日"), "TRUE"),
+            "user_id": clean_text(row.get("user_id")),
             "利用者名": clean_text(row.get("利用者名")),
             "分類": clean_text(row.get("分類"), "予定"),
             "タイトル": clean_text(row.get("件名"), "予定"),
@@ -5498,6 +5557,12 @@ def extract_schedule_candidates_from_handover_df(df: pd.DataFrame, start_date=No
         record_id = clean_text(row.get("記録ID"))
         record_date = row.get("日付")
         shift = clean_text(row.get("勤務帯"))
+        row_target_type = clean_text(row.get("対象区分"))
+        row_user_id = clean_text(row.get("user_id"))
+        row_user_name = clean_text(row.get("利用者名"))
+        if row_user_name == "業務全般":
+            row_user_name = ""
+            row_user_id = ""
         combined_text = "\n".join([
             clean_text(row.get("全体申し送り")),
             clean_text(row.get("要確認事項")),
@@ -5516,7 +5581,9 @@ def extract_schedule_candidates_from_handover_df(df: pd.DataFrame, start_date=No
                 schedule_date = parse_schedule_date_from_text(line, record_date)
                 start_time = parse_schedule_time_from_text(line)
                 end_time = calc_schedule_end_time(start_time, 60)
-                user_name = detect_user_name_in_text(line)
+                detected_user_name = detect_user_name_in_text(line)
+                user_name = row_user_name or detected_user_name
+                user_id = row_user_id or get_user_id_by_name(user_name)
                 subject = build_schedule_candidate_subject(rule, user_name)
                 all_day = "TRUE" if not start_time else "FALSE"
                 rows.append({
@@ -5528,6 +5595,7 @@ def extract_schedule_candidates_from_handover_df(df: pd.DataFrame, start_date=No
                     "勤務帯": shift,
                     "利用者": user_name,
                     "利用者名": user_name,
+                    "user_id": user_id,
                     "キーワード": rule["keyword"],
                     "分類": rule.get("category", "予定"),
                     "タイトル": subject,
@@ -5634,11 +5702,12 @@ def show_handover_schedule_export_menu():
         use_container_width=True,
         hide_index=True,
         num_rows="dynamic",
-        column_order=["登録する", "日時", "利用者", "分類", "タイトル", "詳細", "場所", "予定ID", "元日付", "勤務帯", "キーワード", "元文章"],
+        column_order=["登録する", "日時", "利用者", "user_id", "分類", "タイトル", "詳細", "場所", "予定ID", "元日付", "勤務帯", "キーワード", "元文章"],
         column_config={
             "登録する": st.column_config.CheckboxColumn("登録する"),
             "日時": st.column_config.TextColumn("日時（例：2026-05-27 14:00）"),
             "利用者": st.column_config.TextColumn("利用者"),
+            "user_id": st.column_config.TextColumn("利用者ID"),
             "分類": st.column_config.SelectboxColumn("分類", options=["医療", "医療・介護", "家族", "家族・相談", "外出", "生活", "予定", "その他"]),
             "タイトル": st.column_config.TextColumn("タイトル"),
             "詳細": st.column_config.TextColumn("詳細"),
@@ -5730,7 +5799,7 @@ def render_business_handover_card(row):
             margin-bottom:12px;
             background-color:#fffdf7;
         ">
-        <b>{icon} {record_date}｜{clean_text(row.get('勤務帯'))}｜{clean_text(row.get('記入者'))}｜{priority}｜{clean_text(row.get('対応状況'))}</b><br><br>
+        <b>{icon} {record_date}｜{clean_text(row.get('勤務帯'))}｜{clean_text(row.get('記入者'))}｜対象：{make_handover_target_label(row.get('user_id'), row.get('利用者名'), row.get('対象区分'))}｜{priority}｜{clean_text(row.get('対応状況'))}</b><br><br>
         <b>全体申し送り</b><br>
         {clean_text(row.get('全体申し送り'), '記載なし').replace(chr(10), '<br>')}<br><br>
         <b>要確認事項</b><br>
@@ -5795,13 +5864,16 @@ def show_business_handover_menu():
         st.subheader("業務全体申し送りに入力")
 
         with st.form("business_handover_form", clear_on_submit=False):
-            c1, c2, c3 = st.columns(3)
+            c1, c2, c3, c4 = st.columns(4)
             with c1:
                 record_date = st.date_input("日付", value=today_jst(), key="business_handover_date")
             with c2:
                 shift_type = st.selectbox("勤務帯", ["日勤", "夜勤"], index=0, key="business_handover_shift")
             with c3:
                 staff_name = st.text_input("記入者", placeholder="例：藤野", key="business_handover_staff")
+            with c4:
+                target_options = build_handover_target_options()
+                target_selection = st.selectbox("対象", target_options, index=0, key="business_handover_target")
 
             st.markdown("#### 事実／気づき／次に見ること")
             st.caption("責めるためではなく、次の勤務者が動きやすくなる形で分けて残します。")
@@ -5875,6 +5947,8 @@ def show_business_handover_menu():
                 st.warning("全体申し送り、または要確認事項を入力してください。")
                 st.stop()
 
+            target_type, target_user_id, target_user_name = resolve_handover_target(target_selection)
+
             record_id = make_business_handover_id(record_date, shift_type, staff_name)
             photo1_path = save_business_handover_photo(photo1_file, record_id, 1)
             photo2_path = save_business_handover_photo(photo2_file, record_id, 2)
@@ -5887,6 +5961,9 @@ def show_business_handover_menu():
                 "日付": record_date,
                 "勤務帯": shift_type,
                 "記入者": clean_text(staff_name),
+                "対象区分": target_type,
+                "user_id": target_user_id,
+                "利用者名": target_user_name,
                 "全体申し送り": clean_text(overall_note),
                 "要確認事項": clean_text(check_note),
                 "優先度": priority,
@@ -5955,6 +6032,9 @@ def show_business_handover_menu():
         if keyword:
             search_text = (
                 filtered["記入者"].fillna("").astype(str)
+                + " " + filtered.get("対象区分", "").fillna("").astype(str)
+                + " " + filtered.get("user_id", "").fillna("").astype(str)
+                + " " + filtered.get("利用者名", "").fillna("").astype(str)
                 + " " + filtered["全体申し送り"].fillna("").astype(str)
                 + " " + filtered["要確認事項"].fillna("").astype(str)
             )
@@ -5972,8 +6052,9 @@ def show_business_handover_menu():
 
         display_df = filtered.copy()
         display_df["日付"] = pd.to_datetime(display_df["日付"], errors="coerce").dt.strftime("%Y-%m-%d")
+        display_cols = ["日付", "勤務帯", "記入者", "対象区分", "user_id", "利用者名", "優先度", "対応状況", "全体申し送り", "要確認事項", "Excel自動抽出情報", "入力Excel表示情報", "記録日時"]
         st.dataframe(
-            display_df[["日付", "勤務帯", "記入者", "優先度", "対応状況", "全体申し送り", "要確認事項", "Excel自動抽出情報", "入力Excel表示情報", "記録日時"]],
+            display_df[[c for c in display_cols if c in display_df.columns]],
             use_container_width=True,
             hide_index=True,
         )
@@ -6035,6 +6116,17 @@ def show_business_handover_menu():
                 )
             with u3:
                 update_staff = st.text_input("記入者", value=clean_text(selected_row.get("記入者")), key="bh_update_staff")
+
+            update_target_options = build_handover_target_options()
+            current_target_label = make_handover_target_label(selected_row.get("user_id"), selected_row.get("利用者名"), selected_row.get("対象区分"))
+            if current_target_label not in update_target_options:
+                update_target_options = [current_target_label] + update_target_options
+            update_target_selection = st.selectbox(
+                "対象",
+                update_target_options,
+                index=update_target_options.index(current_target_label) if current_target_label in update_target_options else 0,
+                key="bh_update_target",
+            )
 
             update_overall = st.text_area(
                 "全体申し送り",
@@ -6114,9 +6206,14 @@ def show_business_handover_menu():
                 st.error("更新対象の記録が見つかりません。")
                 st.stop()
 
+            update_target_type, update_user_id, update_user_name = resolve_handover_target(update_target_selection)
+
             df_update.loc[mask, "日付"] = pd.to_datetime(update_date)
             df_update.loc[mask, "勤務帯"] = update_shift
             df_update.loc[mask, "記入者"] = clean_text(update_staff)
+            df_update.loc[mask, "対象区分"] = update_target_type
+            df_update.loc[mask, "user_id"] = update_user_id
+            df_update.loc[mask, "利用者名"] = update_user_name
             df_update.loc[mask, "全体申し送り"] = clean_text(update_overall)
             df_update.loc[mask, "要確認事項"] = clean_text(update_check)
             df_update.loc[mask, "優先度"] = update_priority
