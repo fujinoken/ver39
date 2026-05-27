@@ -9329,7 +9329,7 @@ def apply_product_ui_ux():
         unsafe_allow_html=True,
     )
 
-def product_ui_notice():
+
    
 
 def danger_note(text):
