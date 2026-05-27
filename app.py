@@ -9355,15 +9355,8 @@ def os_mindset_box(title, body, icon="📝"):
 
 
 def show_observation_perspective(kind="health"):
-    """入力画面に短い観察の視点を表示する。"""
-    messages = {
-        "health": "数値だけで判断せず、普段との違いを一つだけ残します。診断ではなく、次の職員が見やすくなる記録です。",
-        "excretion": "出た・出ないだけで終わらせず、水分・食事・表情・腹部の様子へつなげます。責める記録ではなく、見逃さない記録です。",
-        "handover": "申し送りは『誰が悪いか』ではなく、『何が起きたか／何に気づいたか／次に何を見るか』を渡すものです。",
-        "admin": "管理者画面では、職員のミス探しではなく、記録・共有・対応のどこで止まっているかを見ます。",
-        "ai": "AIは判断者ではありません。記録を整理し、確認ポイントを見やすくする補助係として使います。",
-    }
-    os_mindset_box("観察の視点", messages.get(kind, messages["health"]), "👀")
+    """入力画面の観察の視点表示。現在は非表示。"""
+    return
 
 
 def build_confirm_points_from_attention(row):
