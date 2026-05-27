@@ -9041,69 +9041,81 @@ def apply_product_ui_ux():
     目的：情報密度を下げ、白背景・行間・カード余白・ボタン間隔を広げ、現場が焦らず操作できる画面にする。
     画像・イラスト風の装飾は表示せず、記録と確認に集中できる余白を優先する。
     """
+    theme = get_ui_theme()
+    color_setting = get_color_settings()
+    bg = clean_text(theme.get("bg"), "#FFFFFF")
+    surface = clean_text(theme.get("surface"), "#FFFFFF")
+    soft = clean_text(theme.get("surface_soft"), bg)
+    accent = clean_text(theme.get("accent"), "#C9705C")
+    accent_dark = clean_text(theme.get("accent_dark"), accent)
+    sub = clean_text(theme.get("sub"), "#666666")
+    border = clean_text(theme.get("border"), "#E7E1D8")
+    alert = clean_text(color_setting.get("alert"), accent)
+    success = clean_text(color_setting.get("success"), accent_dark)
+
     st.markdown(
-        """
+        f"""
         <style>
         /* ===== 余白を守るOS：全体 ===== */
-        html, body, [class*="css"] {
+        html, body, [class*="css"] {{
             -webkit-text-size-adjust: 100%;
             line-height: 1.78 !important;
-        }
+        }}
 
-        .stApp {
-            background: #FFFFFF !important;
-        }
+        .stApp {{
+            background: {bg} !important;
+        }}
 
-        .block-container {
+        .block-container {{
             max-width: 1180px !important;
             padding-top: 1.8rem !important;
             padding-left: 2.1rem !important;
             padding-right: 2.1rem !important;
             padding-bottom: 4.5rem !important;
-        }
+        }}
 
         /* ===== 余白を守るOS：見出し ===== */
-        h1, h2, h3 {
+        h1, h2, h3 {{
             letter-spacing: .02em !important;
             line-height: 1.45 !important;
             margin-top: 1.3rem !important;
             margin-bottom: .9rem !important;
-        }
-        h1 { font-size: 1.95rem !important; }
-        h2 { font-size: 1.48rem !important; }
-        h3 { font-size: 1.2rem !important; }
+        }}
+        h1 {{ font-size: 1.95rem !important; }}
+        h2 {{ font-size: 1.48rem !important; }}
+        h3 {{ font-size: 1.2rem !important; }}
 
-        p, li, div, span {
+        p, li, div, span {{
             line-height: 1.78;
-        }
+        }}
 
         /* ===== 余白を守るOS：サイドバーも白基調 ===== */
-        [data-testid="stSidebar"] {
-            background: #FFFFFF !important;
-            border-right: 1px solid #E7E1D8 !important;
+        [data-testid="stSidebar"] {{
+            background: {surface} !important;
+            border-right: 1px solid {border} !important;
             min-width: 300px;
-        }
-        [data-testid="stSidebar"] .stRadio label {
-            background: #FFFFFF !important;
-            border: 1px solid #E7E1D8 !important;
+        }}
+        [data-testid="stSidebar"] .stRadio label {{
+            background: {surface} !important;
+            border: 1px solid {border} !important;
             border-radius: 16px !important;
             padding: 12px 13px !important;
             margin: 8px 0 !important;
             line-height: 1.55 !important;
-        }
-        [data-testid="stSidebar"] .stRadio label:hover {
-            border-color: #C9705C !important;
-            background: #FFFDF9 !important;
-        }
+        }}
+        [data-testid="stSidebar"] .stRadio label:hover {{
+            border-color: {accent} !important;
+            background: {soft} !important;
+        }}
 
         /* ===== 余白を守るOS：ボタン間隔を広げる ===== */
         div[data-testid="stButton"],
-        div[data-testid="stDownloadButton"] {
+        div[data-testid="stDownloadButton"] {{
             margin-top: .45rem !important;
             margin-bottom: .75rem !important;
-        }
+        }}
         div[data-testid="stButton"] button,
-        div[data-testid="stDownloadButton"] button {
+        div[data-testid="stDownloadButton"] button {{
             min-height: 62px !important;
             border-radius: 20px !important;
             font-size: 1.02rem !important;
@@ -9112,23 +9124,23 @@ def apply_product_ui_ux():
             white-space: normal !important;
             line-height: 1.45 !important;
             box-shadow: none !important;
-            border: 1px solid #E7E1D8 !important;
-            background: #FFFFFF !important;
-            color: #3D463D !important;
-        }
+            border: 1px solid {border} !important;
+            background: {surface} !important;
+            color: {accent_dark} !important;
+        }}
         div[data-testid="stButton"] button[kind="primary"],
         div[data-testid="stButton"] button[kind="secondary"],
         button[kind="primary"],
-        button[kind="secondary"] {
-            color: #3D463D !important;
-        }
+        button[kind="secondary"] {{
+            color: {accent_dark} !important;
+        }}
         div[data-testid="stButton"] button:focus,
         div[data-testid="stDownloadButton"] button:focus,
         input:focus,
-        textarea:focus {
+        textarea:focus {{
             outline: 3px solid rgba(201,112,92,.20) !important;
             outline-offset: 3px !important;
-        }
+        }}
 
         /* ===== 余白を守るOS：入力欄 ===== */
         div[data-baseweb="select"] > div,
@@ -9136,33 +9148,33 @@ def apply_product_ui_ux():
         textarea,
         .stTextInput input,
         .stNumberInput input,
-        .stDateInput input {
+        .stDateInput input {{
             min-height: 58px !important;
             font-size: 1.02rem !important;
             border-radius: 18px !important;
             line-height: 1.65 !important;
-            background: #FFFFFF !important;
-        }
-        textarea {
+            background: {surface} !important;
+        }}
+        textarea {{
             min-height: 140px !important;
             line-height: 1.85 !important;
             padding-top: 14px !important;
             padding-bottom: 14px !important;
-        }
-        label, .stMarkdown {
+        }}
+        label, .stMarkdown {{
             line-height: 1.75 !important;
-        }
+        }}
 
         /* ===== 余白を守るOS：ラジオ・チェック ===== */
         div[role="radiogroup"] label,
-        label[data-baseweb="checkbox"] {
+        label[data-baseweb="checkbox"] {{
             min-height: 50px !important;
             padding-top: 9px !important;
             padding-bottom: 9px !important;
             margin-bottom: 6px !important;
             font-size: 1.0rem !important;
             line-height: 1.6 !important;
-        }
+        }}
 
         /* ===== 余白を守るOS：カード ===== */
         .ui-card,
@@ -9174,134 +9186,134 @@ def apply_product_ui_ux():
         .admin-welcome,
         .safe-note,
         .danger-note,
-        .info-box {
-            background: #FFFFFF !important;
+        .info-box {{
+            background: {surface} !important;
             border-radius: 26px !important;
             padding: 24px 26px !important;
             margin: 18px 0 26px 0 !important;
-            border: 1px solid #E7E1D8 !important;
+            border: 1px solid {border} !important;
             box-shadow: none !important;
             line-height: 1.85 !important;
-        }
+        }}
         .ui-card-soft,
         .mindset-box,
-        .safe-note {
-            background: #FFFDF9 !important;
-        }
-        .danger-note {
-            background: #FFF8F4 !important;
-        }
+        .safe-note {{
+            background: {soft} !important;
+        }}
+        .danger-note {{
+            background: {soft} !important;
+        }}
         .ui-card strong,
         .ui-card-soft strong,
-        .mindset-title {
+        .mindset-title {{
             font-size: 1.08rem !important;
             line-height: 1.6 !important;
-        }
+        }}
 
-        .ui-section-title {
+        .ui-section-title {{
             margin: 26px 0 12px 0 !important;
             gap: 12px !important;
             line-height: 1.5 !important;
-        }
-        .ui-section-caption {
+        }}
+        .ui-section-caption {{
             margin-bottom: 22px !important;
             line-height: 1.85 !important;
-            color: #666666 !important;
-        }
-        .ui-badge, .mini-badge {
-            background: #FFFFFF !important;
-            border: 1px solid #E7E1D8 !important;
+            color: {sub} !important;
+        }}
+        .ui-badge, .mini-badge {{
+            background: {surface} !important;
+            border: 1px solid {border} !important;
             padding: 7px 13px !important;
             margin: 5px 7px 5px 0 !important;
             line-height: 1.5 !important;
             box-shadow: none !important;
-        }
+        }}
 
         /* ===== 余白を守るOS：タブ ===== */
-        .stTabs [data-baseweb="tab-list"] {
+        .stTabs [data-baseweb="tab-list"] {{
             gap: 12px !important;
             flex-wrap: wrap !important;
             margin-bottom: 18px !important;
-        }
-        .stTabs [data-baseweb="tab"] {
+        }}
+        .stTabs [data-baseweb="tab"] {{
             min-height: 52px !important;
             border-radius: 999px !important;
             padding: 12px 18px !important;
-            background: #FFFFFF !important;
-            border: 1px solid #E7E1D8 !important;
+            background: {surface} !important;
+            border: 1px solid {border} !important;
             line-height: 1.45 !important;
-        }
+        }}
 
         /* ===== 余白を守るOS：表 ===== */
-        div[data-testid="stDataFrame"] {
+        div[data-testid="stDataFrame"] {{
             border-radius: 22px !important;
             overflow: hidden;
-            border: 1px solid #E7E1D8 !important;
+            border: 1px solid {border} !important;
             margin-top: 16px !important;
             margin-bottom: 24px !important;
             box-shadow: none !important;
-        }
+        }}
 
         /* ===== 余白を守るOS：イラスト・装飾画像を非表示 ===== */
         .hidamari-illust-row,
         .hidamari-illust-card,
         .hidamari-emoji,
         img[alt*="イラスト"],
-        img[alt*="illustration"] {
+        img[alt*="illustration"] {{
             display: none !important;
-        }
+        }}
 
         /* ヒーローは画像なし・白基調の静かな案内にする */
-        .hidamari-hero {
-            background: #FFFFFF !important;
-            border: 1px solid #E7E1D8 !important;
+        .hidamari-hero {{
+            background: {surface} !important;
+            border: 1px solid {border} !important;
             border-radius: 28px !important;
             padding: 30px 28px !important;
             margin: 12px auto 34px auto !important;
             max-width: 920px !important;
             text-align: left !important;
             box-shadow: none !important;
-        }
-        .hidamari-hero-title {
+        }}
+        .hidamari-hero-title {{
             font-size: 1.9rem !important;
             line-height: 1.45 !important;
             margin-bottom: 14px !important;
-        }
-        .hidamari-hero-sub {
+        }}
+        .hidamari-hero-sub {{
             font-size: 1.03rem !important;
             line-height: 1.9 !important;
-            color: #666666 !important;
+            color: {sub} !important;
             margin-bottom: 0 !important;
-        }
+        }}
 
         /* ===== 余白を守るOS：列間も少し広げる ===== */
-        div[data-testid="column"] {
+        div[data-testid="column"] {{
             padding-left: .35rem !important;
             padding-right: .35rem !important;
-        }
+        }}
 
         /* ===== 余白を守るOS：iPad/Fire HD ===== */
-        @media (max-width: 1100px) {
-            .block-container {
+        @media (max-width: 1100px) {{
+            .block-container {{
                 padding-left: 1.0rem !important;
                 padding-right: 1.0rem !important;
                 padding-top: 1.3rem !important;
-            }
-            div[data-testid="column"] {
+            }}
+            div[data-testid="column"] {{
                 min-width: 100% !important;
                 flex: 1 1 100% !important;
                 padding-left: 0 !important;
                 padding-right: 0 !important;
-            }
+            }}
             div[data-testid="stButton"] button,
-            div[data-testid="stDownloadButton"] button {
+            div[data-testid="stDownloadButton"] button {{
                 min-height: 66px !important;
                 font-size: 1.06rem !important;
-            }
-            .stTabs [data-baseweb="tab"] {
+            }}
+            .stTabs [data-baseweb="tab"] {{
                 min-height: 54px !important;
                 padding: 13px 18px !important;
-            }
+            }}
             .ui-card,
             .ui-card-soft,
             .mindset-box,
@@ -9311,19 +9323,19 @@ def apply_product_ui_ux():
             .admin-welcome,
             .safe-note,
             .danger-note,
-            .info-box {
+            .info-box {{
                 padding: 20px 18px !important;
                 margin: 16px 0 24px 0 !important;
                 border-radius: 22px !important;
-            }
-            .hidamari-hero {
+            }}
+            .hidamari-hero {{
                 padding: 24px 20px !important;
                 border-radius: 24px !important;
-            }
-            .hidamari-hero-title {
+            }}
+            .hidamari-hero-title {{
                 font-size: 1.5rem !important;
-            }
-        }
+            }}
+        }}
         </style>
         """,
         unsafe_allow_html=True,
