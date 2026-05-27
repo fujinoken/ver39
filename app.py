@@ -9332,7 +9332,7 @@ def apply_product_ui_ux():
 def product_ui_notice():
     """商品化UIの短い案内。画面冒頭で必要に応じて使う。"""
     st.markdown(
-        '<div class="safe-note"><strong>現場OSの使い方：</strong>大きく押す、迷ったら戻る、記録は責めるためではなく次の人へ渡すために残します。</div>',
+        '<div class="safe-note"><strong></strong></div>',
         unsafe_allow_html=True,
     )
 
