@@ -5109,6 +5109,407 @@ def show_business_handover_auto_extract_box(target_date):
     return auto_text
 
 
+
+# =========================
+# Ver5予定候補抽出：申し送り → 予定候補 → Excel/CSV出力
+# Googleカレンダー等へ直接API連携せず、管理者確認後に取込用データを出力する安全設計。
+# =========================
+SCHEDULE_KEYWORD_RULES = [
+    {"keyword": "受診", "title": "受診", "category": "医療"},
+    {"keyword": "病院", "title": "受診・病院", "category": "医療"},
+    {"keyword": "通院", "title": "通院", "category": "医療"},
+    {"keyword": "往診", "title": "往診", "category": "医療"},
+    {"keyword": "訪問診療", "title": "訪問診療", "category": "医療"},
+    {"keyword": "訪問看護", "title": "訪問看護", "category": "医療・介護"},
+    {"keyword": "訪問", "title": "訪問", "category": "予定"},
+    {"keyword": "面談", "title": "面談", "category": "家族・相談"},
+    {"keyword": "家族来訪", "title": "家族来訪", "category": "家族"},
+    {"keyword": "家族面談", "title": "家族面談", "category": "家族"},
+    {"keyword": "来訪", "title": "来訪", "category": "予定"},
+    {"keyword": "外出", "title": "外出", "category": "外出"},
+    {"keyword": "外泊", "title": "外泊", "category": "外出"},
+    {"keyword": "送迎", "title": "送迎", "category": "外出"},
+    {"keyword": "美容", "title": "美容", "category": "生活"},
+    {"keyword": "理美容", "title": "理美容", "category": "生活"},
+    {"keyword": "買い物", "title": "買い物", "category": "生活"},
+]
+
+SCHEDULE_EXPORT_COLUMNS = [
+    "取込対象",
+    "予定ID",
+    "元記録ID",
+    "元日付",
+    "勤務帯",
+    "利用者名",
+    "キーワード",
+    "分類",
+    "件名",
+    "開始日",
+    "開始時刻",
+    "終了日",
+    "終了時刻",
+    "終日",
+    "場所",
+    "内容",
+    "元文章",
+]
+
+GOOGLE_CALENDAR_CSV_COLUMNS = [
+    "Subject",
+    "Start Date",
+    "Start Time",
+    "End Date",
+    "End Time",
+    "All Day Event",
+    "Description",
+    "Location",
+    "Private",
+]
+
+
+def split_handover_lines(text_value: str) -> list:
+    """申し送り本文を、予定候補抽出しやすい単位へ分割する。"""
+    text_value = clean_text(text_value)
+    if not text_value:
+        return []
+    # 構造化メモの見出しや箇条書きを考慮して分割
+    normalized = text_value.replace("。", "。\n").replace("、", "、")
+    parts = []
+    for line in normalized.splitlines():
+        line = clean_text(line)
+        if not line:
+            continue
+        # 長すぎる行は句点で分割した結果を優先
+        for part in re.split(r"[。\n\r]+", line):
+            part = clean_text(part)
+            if part:
+                parts.append(part)
+    return parts
+
+
+def get_schedule_keyword_hits(line: str) -> list:
+    """1行に含まれる予定化キーワードを返す。長い語を優先して重複を抑える。"""
+    line = clean_text(line)
+    hits = []
+    used = set()
+    for rule in sorted(SCHEDULE_KEYWORD_RULES, key=lambda x: len(x["keyword"]), reverse=True):
+        kw = rule["keyword"]
+        if kw in line and kw not in used:
+            hits.append(rule)
+            used.add(kw)
+    return hits
+
+
+def parse_schedule_date_from_text(line: str, base_date) -> date:
+    """申し送り文から日付を推定。見つからなければ元記録日を使う。"""
+    if isinstance(base_date, datetime):
+        base = base_date.date()
+    else:
+        try:
+            base = pd.to_datetime(base_date, errors="coerce").date()
+        except Exception:
+            base = today_jst()
+    if not base:
+        base = today_jst()
+
+    line = clean_text(line)
+    if "明後日" in line or "あさって" in line:
+        return base + timedelta(days=2)
+    if "明日" in line or "翌日" in line:
+        return base + timedelta(days=1)
+    if "本日" in line or "今日" in line:
+        return base
+
+    # 2026/5/20, 2026-05-20, 2026年5月20日
+    m = re.search(r"(20\d{2})[年/\-\.](\d{1,2})[月/\-\.](\d{1,2})日?", line)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except Exception:
+            pass
+
+    # 5/20, 5月20日
+    m = re.search(r"(?<!\d)(\d{1,2})[月/\.](\d{1,2})日?", line)
+    if m:
+        try:
+            return date(base.year, int(m.group(1)), int(m.group(2)))
+        except Exception:
+            pass
+
+    return base
+
+
+def parse_schedule_time_from_text(line: str):
+    """申し送り文から開始時刻を推定。見つからなければ空欄＝終日予定扱い。"""
+    line = clean_text(line)
+    # 14:30 / 14：30
+    m = re.search(r"(\d{1,2})[:：](\d{2})", line)
+    if m:
+        h = safe_int(m.group(1), 0)
+        minute = safe_int(m.group(2), 0)
+        if 0 <= h <= 23 and 0 <= minute <= 59:
+            return f"{h:02d}:{minute:02d}"
+
+    # 午前10時 / 午後2時30分 / 10時
+    m = re.search(r"(午前|午後)?\s*(\d{1,2})時\s*(\d{1,2})?分?", line)
+    if m:
+        ampm = clean_text(m.group(1))
+        h = safe_int(m.group(2), 0)
+        minute = safe_int(m.group(3), 0)
+        if ampm == "午後" and 1 <= h <= 11:
+            h += 12
+        if ampm == "午前" and h == 12:
+            h = 0
+        if 0 <= h <= 23 and 0 <= minute <= 59:
+            return f"{h:02d}:{minute:02d}"
+
+    return ""
+
+
+def calc_schedule_end_time(start_time: str, minutes: int = 60) -> str:
+    start_time = clean_text(start_time)
+    if not start_time:
+        return ""
+    try:
+        dt = datetime.strptime(start_time, "%H:%M") + timedelta(minutes=minutes)
+        return dt.strftime("%H:%M")
+    except Exception:
+        return ""
+
+
+def detect_user_name_in_text(line: str) -> str:
+    """申し送り文中に利用者名が含まれる場合は拾う。見つからない場合は空欄。"""
+    try:
+        users = get_active_user_names()
+    except Exception:
+        users = []
+    line = clean_text(line)
+    for name in users:
+        name_text = clean_text(name)
+        if name_text and name_text in line:
+            return name_text
+        # 「様」抜き表記にも軽く対応
+        short_name = name_text.replace("様", "")
+        if short_name and short_name in line:
+            return name_text
+    return ""
+
+
+def make_schedule_candidate_id(record_id: str, line: str, keyword: str, idx: int) -> str:
+    source = f"{clean_text(record_id)}__{clean_text(line)}__{clean_text(keyword)}__{idx}"
+    return "sch_" + hashlib.sha1(source.encode("utf-8")).hexdigest()[:12]
+
+
+def build_schedule_candidate_subject(rule: dict, user_name: str) -> str:
+    base = clean_text(rule.get("title"), clean_text(rule.get("keyword"), "予定"))
+    user_name = clean_text(user_name)
+    return f"{user_name}：{base}" if user_name else base
+
+
+def extract_schedule_candidates_from_handover_df(df: pd.DataFrame, start_date=None, end_date=None, keyword_filter="") -> pd.DataFrame:
+    """業務全体申し送りから、カレンダー取込前の予定候補を抽出する。"""
+    if df is None or df.empty:
+        return pd.DataFrame(columns=SCHEDULE_EXPORT_COLUMNS)
+
+    work = df.copy()
+    if "日付" not in work.columns:
+        return pd.DataFrame(columns=SCHEDULE_EXPORT_COLUMNS)
+    work["日付_dt"] = pd.to_datetime(work["日付"], errors="coerce")
+
+    if start_date:
+        work = work[work["日付_dt"].dt.date >= start_date]
+    if end_date:
+        work = work[work["日付_dt"].dt.date <= end_date]
+
+    keyword_filter = clean_text(keyword_filter)
+    rows = []
+    for _, row in work.iterrows():
+        record_id = clean_text(row.get("記録ID"))
+        record_date = row.get("日付")
+        shift = clean_text(row.get("勤務帯"))
+        combined_text = "\n".join([
+            clean_text(row.get("全体申し送り")),
+            clean_text(row.get("要確認事項")),
+        ])
+        if keyword_filter and keyword_filter not in combined_text:
+            continue
+
+        lines = split_handover_lines(combined_text)
+        candidate_idx = 0
+        for line in lines:
+            hits = get_schedule_keyword_hits(line)
+            if not hits:
+                continue
+            for rule in hits:
+                candidate_idx += 1
+                schedule_date = parse_schedule_date_from_text(line, record_date)
+                start_time = parse_schedule_time_from_text(line)
+                end_time = calc_schedule_end_time(start_time, 60)
+                user_name = detect_user_name_in_text(line)
+                subject = build_schedule_candidate_subject(rule, user_name)
+                all_day = "TRUE" if not start_time else "FALSE"
+                rows.append({
+                    "取込対象": True,
+                    "予定ID": make_schedule_candidate_id(record_id, line, rule["keyword"], candidate_idx),
+                    "元記録ID": record_id,
+                    "元日付": pd.to_datetime(record_date, errors="coerce").strftime("%Y-%m-%d") if not pd.isna(pd.to_datetime(record_date, errors="coerce")) else "",
+                    "勤務帯": shift,
+                    "利用者名": user_name,
+                    "キーワード": rule["keyword"],
+                    "分類": rule.get("category", "予定"),
+                    "件名": subject,
+                    "開始日": schedule_date.strftime("%Y-%m-%d"),
+                    "開始時刻": start_time,
+                    "終了日": schedule_date.strftime("%Y-%m-%d"),
+                    "終了時刻": end_time,
+                    "終日": all_day,
+                    "場所": "",
+                    "内容": f"申し送りから抽出：{line}",
+                    "元文章": line,
+                })
+    if not rows:
+        return pd.DataFrame(columns=SCHEDULE_EXPORT_COLUMNS)
+    result = pd.DataFrame(rows, columns=SCHEDULE_EXPORT_COLUMNS)
+    return result.drop_duplicates(subset=["予定ID"]).reset_index(drop=True)
+
+
+def convert_to_google_calendar_csv_df(candidate_df: pd.DataFrame) -> pd.DataFrame:
+    """GoogleカレンダーCSV取込形式へ変換する。"""
+    if candidate_df is None or candidate_df.empty:
+        return pd.DataFrame(columns=GOOGLE_CALENDAR_CSV_COLUMNS)
+
+    work = candidate_df.copy()
+    if "取込対象" in work.columns:
+        work = work[work["取込対象"].astype(str).str.lower().isin(["true", "1", "yes", "対象", "取込", "取込対象"])]
+    if work.empty:
+        return pd.DataFrame(columns=GOOGLE_CALENDAR_CSV_COLUMNS)
+
+    out = pd.DataFrame(columns=GOOGLE_CALENDAR_CSV_COLUMNS)
+    out["Subject"] = work["件名"].map(lambda x: clean_text(x, "予定"))
+    # Google Calendar CSVは環境によって yyyy/mm/dd が安定しやすい
+    out["Start Date"] = pd.to_datetime(work["開始日"], errors="coerce").dt.strftime("%Y/%m/%d")
+    out["Start Time"] = work["開始時刻"].map(lambda x: clean_text(x))
+    out["End Date"] = pd.to_datetime(work["終了日"], errors="coerce").dt.strftime("%Y/%m/%d")
+    out["End Time"] = work["終了時刻"].map(lambda x: clean_text(x))
+    out["All Day Event"] = work["終日"].map(lambda x: "TRUE" if clean_text(x).upper() in ["TRUE", "1", "YES", "終日"] else "FALSE")
+    out["Description"] = work["内容"].map(lambda x: clean_text(x))
+    out["Location"] = work["場所"].map(lambda x: clean_text(x))
+    out["Private"] = "FALSE"
+    return out[GOOGLE_CALENDAR_CSV_COLUMNS]
+
+
+def dataframe_to_csv_bytes(df: pd.DataFrame) -> bytes:
+    """Excelで文字化けしにくいUTF-8 BOM付きCSVを返す。"""
+    if df is None:
+        df = pd.DataFrame()
+    return df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+
+
+def show_handover_schedule_export_menu():
+    """申し送りから予定候補を抽出し、管理者確認後にExcel/CSVで出力する画面。"""
+    if not is_admin_user():
+        st.warning("このメニューは管理者専用です。")
+        return
+
+    st.subheader("申し送り予定候補の自動抽出・出力")
+    st.caption("申し送り本文から「受診」「訪問」「家族来訪」「外出」「病院」「面談」などを拾い、管理者が確認・修正してからカレンダー取込用データを出力します。")
+
+    df = load_business_handover_data()
+    if df.empty:
+        st.info("業務全体申し送りがまだ登録されていません。")
+        return
+
+    work = df.copy()
+    work["日付_dt"] = pd.to_datetime(work["日付"], errors="coerce")
+    valid_dates = work["日付_dt"].dropna()
+    if valid_dates.empty:
+        default_start = today_jst() - timedelta(days=7)
+        default_end = today_jst()
+    else:
+        default_start = max(valid_dates.min().date(), today_jst() - timedelta(days=30))
+        default_end = valid_dates.max().date()
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        start_date = st.date_input("抽出開始日", value=default_start, key="schedule_extract_start")
+    with c2:
+        end_date = st.date_input("抽出終了日", value=default_end, key="schedule_extract_end")
+    with c3:
+        keyword_filter = st.text_input("本文キーワード絞り込み", placeholder="例：受診、家族、外出", key="schedule_extract_keyword")
+
+    candidates = extract_schedule_candidates_from_handover_df(df, start_date=start_date, end_date=end_date, keyword_filter=keyword_filter)
+
+    if candidates.empty:
+        st.info("この期間の申し送りから予定候補は見つかりませんでした。キーワードや期間を変えて確認してください。")
+        return
+
+    st.success(f"予定候補を {len(candidates)} 件抽出しました。必要に応じて修正してから出力してください。")
+    st.caption("時刻が読み取れない予定は『終日予定』として出力されます。時刻が分かる場合は開始時刻・終了時刻を手入力してください。")
+
+    edited = st.data_editor(
+        candidates,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic",
+        column_config={
+            "取込対象": st.column_config.CheckboxColumn("取込対象"),
+            "開始日": st.column_config.TextColumn("開始日（YYYY-MM-DD）"),
+            "開始時刻": st.column_config.TextColumn("開始時刻（HH:MM）"),
+            "終了日": st.column_config.TextColumn("終了日（YYYY-MM-DD）"),
+            "終了時刻": st.column_config.TextColumn("終了時刻（HH:MM）"),
+            "終日": st.column_config.SelectboxColumn("終日", options=["TRUE", "FALSE"]),
+            "件名": st.column_config.TextColumn("件名"),
+            "場所": st.column_config.TextColumn("場所"),
+            "内容": st.column_config.TextColumn("内容"),
+        },
+        disabled=["予定ID", "元記録ID", "元日付", "勤務帯", "キーワード", "分類", "元文章"],
+        key="schedule_candidate_editor",
+    )
+
+    target_df = edited.copy()
+    if "取込対象" in target_df.columns:
+        target_df = target_df[target_df["取込対象"].astype(str).str.lower().isin(["true", "1", "yes", "対象", "取込", "取込対象"])]
+
+    google_df = convert_to_google_calendar_csv_df(target_df)
+
+    st.markdown("#### 出力")
+    d1, d2, d3 = st.columns(3)
+    with d1:
+        st.download_button(
+            "予定候補一覧をExcelでダウンロード",
+            data=to_excel_download(edited),
+            file_name=f"handover_schedule_candidates_{today_jst().strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+    with d2:
+        st.download_button(
+            "カレンダー取込用CSVをダウンロード",
+            data=dataframe_to_csv_bytes(google_df),
+            file_name=f"google_calendar_import_{today_jst().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    with d3:
+        st.download_button(
+            "カレンダー取込用Excelをダウンロード",
+            data=to_excel_download(google_df),
+            file_name=f"google_calendar_import_{today_jst().strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+
+    with st.expander("Googleカレンダー等へ読み込む際の注意", expanded=False):
+        st.markdown(
+            """
+            - まず「予定候補一覧」で内容を確認してください。
+            - 時刻が空欄の予定は終日予定として扱います。
+            - Googleカレンダーへ取り込む場合は、CSVファイルを使用してください。
+            - 施設運用では、いきなり自動登録せず、管理者確認後に取り込む方式が安全です。
+            """
+        )
+
+
 def render_business_handover_card(row):
     priority = clean_text(row.get("優先度", "通常"), "通常")
     icon = "【至急】" if priority == "至急" else "【注意】" if priority == "注意" else "【通常】"
@@ -5168,7 +5569,7 @@ def show_business_handover_menu():
     show_observation_perspective("handover")
     st.caption("利用者個別ではなく、施設全体の出来事・注意点・次の勤務者に共有したい内容を記録します。")
 
-    tab_input, tab_manage, tab_condition = st.tabs(["新規登録", "検索・更新・削除", "異常検知条件設定"])
+    tab_input, tab_manage, tab_schedule, tab_condition = st.tabs(["新規登録", "検索・更新・削除", "予定候補抽出・出力", "異常検知条件設定"])
 
     with tab_input:
         df = load_business_handover_data()
@@ -5563,6 +5964,9 @@ def show_business_handover_menu():
                 save_business_handover_data(df_delete)
                 st.success("業務全体申し送りを削除しました。")
                 st.rerun()
+
+    with tab_schedule:
+        show_handover_schedule_export_menu()
 
     with tab_condition:
         show_alert_condition_master_menu()
