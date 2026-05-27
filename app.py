@@ -180,6 +180,7 @@ SQLITE_TABLE_APP_SETTINGS = "app_settings"
 SQLITE_TABLE_LIFE_ADL = "life_adl_assessments"
 SQLITE_TABLE_AI_INSIGHT_LOGS = "ai_insight_logs"
 SQLITE_TABLE_USER_NAME_ALIASES = "user_name_aliases"
+SQLITE_TABLE_HANDOVER_KEYWORDS = "handover_keywords"
 
 APP_SETTING_COLUMNS = [
     "設定キー",
@@ -188,6 +189,17 @@ APP_SETTING_COLUMNS = [
     "説明",
     "更新日時",
     "更新者",
+]
+
+HANDOVER_KEYWORD_COLUMNS = [
+    "id",
+    "keyword",
+    "title",
+    "category",
+    "is_active",
+    "sort_order",
+    "created_at",
+    "updated_at",
 ]
 
 from db import database as db_engine
@@ -463,6 +475,10 @@ def ensure_hidamari_db():
     ensure_login_history_file()
     ensure_user_file()
     ensure_user_name_alias_table()
+    try:
+        ensure_handover_keyword_table()
+    except Exception:
+        pass
     try:
         ensure_life_adl_file()
     except Exception:
@@ -5184,7 +5200,136 @@ SCHEDULE_KEYWORD_RULES = [
     {"keyword": "美容", "title": "美容", "category": "生活"},
     {"keyword": "理美容", "title": "理美容", "category": "生活"},
     {"keyword": "買い物", "title": "買い物", "category": "生活"},
+
 ]
+
+DEFAULT_HANDOVER_KEYWORDS = [
+    {"keyword": "受診", "title": "受診", "category": "医療", "is_active": 1, "sort_order": 10},
+    {"keyword": "病院", "title": "受診・病院", "category": "医療", "is_active": 1, "sort_order": 20},
+    {"keyword": "通院", "title": "通院", "category": "医療", "is_active": 1, "sort_order": 30},
+    {"keyword": "往診", "title": "往診", "category": "医療", "is_active": 1, "sort_order": 40},
+    {"keyword": "訪問診療", "title": "訪問診療", "category": "医療", "is_active": 1, "sort_order": 50},
+    {"keyword": "訪問看護", "title": "訪問看護", "category": "医療・介護", "is_active": 1, "sort_order": 60},
+    {"keyword": "訪問", "title": "訪問", "category": "予定", "is_active": 1, "sort_order": 70},
+    {"keyword": "家族来訪", "title": "家族来訪", "category": "家族", "is_active": 1, "sort_order": 80},
+    {"keyword": "面談", "title": "面談", "category": "家族・相談", "is_active": 1, "sort_order": 90},
+    {"keyword": "家族面談", "title": "家族面談", "category": "家族", "is_active": 1, "sort_order": 100},
+    {"keyword": "外出", "title": "外出", "category": "外出", "is_active": 1, "sort_order": 110},
+    {"keyword": "送迎", "title": "送迎", "category": "外出", "is_active": 1, "sort_order": 120},
+]
+
+
+def normalize_handover_keyword_df(df: pd.DataFrame) -> pd.DataFrame:
+    """予定抽出キーワード設定を標準列にそろえる。"""
+    if df is None:
+        df = pd.DataFrame(columns=HANDOVER_KEYWORD_COLUMNS)
+    work = df.copy()
+    for col in HANDOVER_KEYWORD_COLUMNS:
+        if col not in work.columns:
+            work[col] = ""
+    work = work[HANDOVER_KEYWORD_COLUMNS].copy()
+    work["keyword"] = work["keyword"].map(lambda x: clean_text(x))
+    work["title"] = work["title"].map(lambda x: clean_text(x))
+    work["category"] = work["category"].map(lambda x: clean_text(x, "予定"))
+    work["is_active"] = work["is_active"].map(lambda x: 1 if str(x).lower() in ["1", "true", "yes", "on", "使用", "有効", "対象"] else 0)
+    work["sort_order"] = work["sort_order"].map(lambda x: safe_int(x, 100))
+    work["created_at"] = work["created_at"].map(lambda x: clean_text(x))
+    work["updated_at"] = work["updated_at"].map(lambda x: clean_text(x))
+    work = work[work["keyword"] != ""].copy()
+    now_value = format_now_jst("%Y-%m-%d %H:%M:%S")
+    for idx, row in work.iterrows():
+        if not clean_text(row.get("id")):
+            work.at[idx, "id"] = "kw_" + hashlib.sha1(clean_text(row.get("keyword")).encode("utf-8")).hexdigest()[:12]
+        if not clean_text(row.get("title")):
+            work.at[idx, "title"] = clean_text(row.get("keyword"), "予定")
+        if not clean_text(row.get("created_at")):
+            work.at[idx, "created_at"] = now_value
+        work.at[idx, "updated_at"] = clean_text(row.get("updated_at"), now_value)
+    work = work.drop_duplicates(subset=["keyword"], keep="last")
+    return work.reset_index(drop=True)
+
+
+def ensure_handover_keyword_table():
+    """申し送り予定抽出キーワードのDBテーブルを用意し、初期値を投入する。"""
+    try:
+        if not sqlite_table_exists(SQLITE_TABLE_HANDOVER_KEYWORDS):
+            now_value = format_now_jst("%Y-%m-%d %H:%M:%S")
+            rows = []
+            for item in DEFAULT_HANDOVER_KEYWORDS:
+                rows.append({
+                    "id": "kw_" + hashlib.sha1(item["keyword"].encode("utf-8")).hexdigest()[:12],
+                    "keyword": item["keyword"],
+                    "title": item.get("title", item["keyword"]),
+                    "category": item.get("category", "予定"),
+                    "is_active": int(item.get("is_active", 1)),
+                    "sort_order": int(item.get("sort_order", 100)),
+                    "created_at": now_value,
+                    "updated_at": now_value,
+                })
+            save_sqlite_table(
+                pd.DataFrame(rows, columns=HANDOVER_KEYWORD_COLUMNS),
+                SQLITE_TABLE_HANDOVER_KEYWORDS,
+                HANDOVER_KEYWORD_COLUMNS,
+                unique_cols=["id"],
+                sort_cols=["sort_order", "keyword"],
+            )
+    except Exception:
+        pass
+
+
+def load_handover_keywords(active_only=False) -> pd.DataFrame:
+    ensure_handover_keyword_table()
+    try:
+        df = load_sqlite_table(SQLITE_TABLE_HANDOVER_KEYWORDS, HANDOVER_KEYWORD_COLUMNS)
+        df = normalize_handover_keyword_df(df)
+        if active_only:
+            df = df[df["is_active"].astype(int) == 1].copy()
+        return df.sort_values(["sort_order", "keyword"]).reset_index(drop=True)
+    except Exception:
+        fallback = pd.DataFrame(DEFAULT_HANDOVER_KEYWORDS)
+        fallback["id"] = fallback["keyword"].map(lambda x: "kw_" + hashlib.sha1(str(x).encode("utf-8")).hexdigest()[:12])
+        fallback["created_at"] = format_now_jst("%Y-%m-%d %H:%M:%S")
+        fallback["updated_at"] = fallback["created_at"]
+        fallback = fallback[HANDOVER_KEYWORD_COLUMNS]
+        return fallback[fallback["is_active"].astype(int) == 1].copy() if active_only else fallback
+
+
+def save_handover_keywords(df: pd.DataFrame) -> pd.DataFrame:
+    ensure_handover_keyword_table()
+    work = normalize_handover_keyword_df(df)
+    now_value = format_now_jst("%Y-%m-%d %H:%M:%S")
+    work["updated_at"] = now_value
+    save_sqlite_table(
+        work,
+        SQLITE_TABLE_HANDOVER_KEYWORDS,
+        HANDOVER_KEYWORD_COLUMNS,
+        unique_cols=["id"],
+        sort_cols=["sort_order", "keyword"],
+    )
+    try:
+        add_audit_log("予定抽出キーワード設定更新", SQLITE_TABLE_HANDOVER_KEYWORDS, "", f"予定抽出キーワードを{len(work)}件保存")
+    except Exception:
+        pass
+    return work
+
+
+def load_schedule_keyword_rules() -> list:
+    """予定候補抽出に使うキーワードルールをDBから取得する。"""
+    df = load_handover_keywords(active_only=True)
+    if df.empty:
+        return SCHEDULE_KEYWORD_RULES
+    rules = []
+    for _, row in df.iterrows():
+        kw = clean_text(row.get("keyword"))
+        if not kw:
+            continue
+        rules.append({
+            "keyword": kw,
+            "title": clean_text(row.get("title"), kw),
+            "category": clean_text(row.get("category"), "予定"),
+        })
+    return rules or SCHEDULE_KEYWORD_RULES
+
 
 SCHEDULE_EXPORT_COLUMNS = [
     "登録する",
@@ -5422,7 +5567,8 @@ def get_schedule_keyword_hits(line: str) -> list:
     line = clean_text(line)
     hits = []
     used = set()
-    for rule in sorted(SCHEDULE_KEYWORD_RULES, key=lambda x: len(x["keyword"]), reverse=True):
+    rules = load_schedule_keyword_rules()
+    for rule in sorted(rules, key=lambda x: len(x["keyword"]), reverse=True):
         kw = rule["keyword"]
         if kw in line and kw not in used:
             hits.append(rule)
@@ -5649,6 +5795,110 @@ def dataframe_to_csv_bytes(df: pd.DataFrame) -> bytes:
     return df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
 
 
+
+def show_handover_keyword_master_menu():
+    """申し送りから予定候補を抽出するためのキーワード設定。"""
+    if not is_admin_user():
+        st.warning("このメニューは管理者専用です。")
+        return
+
+    st.subheader("予定抽出キーワード設定")
+    st.caption("ここで使用ONにしたキーワードが、『予定候補抽出・出力』画面で自動使用されます。")
+
+    ensure_handover_keyword_table()
+    df = load_handover_keywords(active_only=False)
+
+    if df.empty:
+        df = pd.DataFrame(columns=HANDOVER_KEYWORD_COLUMNS)
+
+    view = df.copy()
+    view["使用"] = view["is_active"].astype(int).map(lambda x: True if x == 1 else False)
+    view = view.rename(columns={
+        "keyword": "キーワード",
+        "title": "予定タイトル",
+        "category": "分類",
+        "sort_order": "並び順",
+    })
+    for col in ["使用", "キーワード", "予定タイトル", "分類", "並び順"]:
+        if col not in view.columns:
+            view[col] = ""
+    editor_cols = ["使用", "キーワード", "予定タイトル", "分類", "並び順"]
+
+    edited = st.data_editor(
+        view[editor_cols],
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic",
+        column_config={
+            "使用": st.column_config.CheckboxColumn("使用"),
+            "キーワード": st.column_config.TextColumn("キーワード", help="申し送り本文に含まれていたら予定候補にします。例：受診、訪問、外出"),
+            "予定タイトル": st.column_config.TextColumn("予定タイトル", help="予定候補のタイトルに使います。空欄ならキーワードを使います。"),
+            "分類": st.column_config.SelectboxColumn("分類", options=["医療", "医療・介護", "家族", "家族・相談", "外出", "生活", "予定", "その他"]),
+            "並び順": st.column_config.NumberColumn("並び順", min_value=1, max_value=999, step=10),
+        },
+        key="handover_keyword_master_editor",
+    )
+
+    c1, c2 = st.columns(2)
+    with c1:
+        save_btn = st.button("予定抽出キーワード設定を保存", type="primary", use_container_width=True)
+    with c2:
+        reset_btn = st.button("初期キーワードを追加", use_container_width=True)
+
+    if reset_btn:
+        current = load_handover_keywords(active_only=False)
+        current_keywords = set(current["keyword"].map(clean_text).tolist()) if not current.empty else set()
+        now_value = format_now_jst("%Y-%m-%d %H:%M:%S")
+        rows = current.to_dict("records") if not current.empty else []
+        for item in DEFAULT_HANDOVER_KEYWORDS:
+            if item["keyword"] in current_keywords:
+                continue
+            rows.append({
+                "id": "kw_" + hashlib.sha1(item["keyword"].encode("utf-8")).hexdigest()[:12],
+                "keyword": item["keyword"],
+                "title": item.get("title", item["keyword"]),
+                "category": item.get("category", "予定"),
+                "is_active": int(item.get("is_active", 1)),
+                "sort_order": int(item.get("sort_order", 100)),
+                "created_at": now_value,
+                "updated_at": now_value,
+            })
+        save_handover_keywords(pd.DataFrame(rows, columns=HANDOVER_KEYWORD_COLUMNS))
+        st.success("初期キーワードを追加しました。")
+        st.rerun()
+
+    if save_btn:
+        rows = []
+        now_value = format_now_jst("%Y-%m-%d %H:%M:%S")
+        old_df = load_handover_keywords(active_only=False)
+        old_map = {clean_text(r.get("keyword")): r for _, r in old_df.iterrows()} if not old_df.empty else {}
+        for _, row in edited.iterrows():
+            keyword = clean_text(row.get("キーワード"))
+            if not keyword:
+                continue
+            old = old_map.get(keyword, {})
+            rows.append({
+                "id": clean_text(old.get("id")) or "kw_" + hashlib.sha1(keyword.encode("utf-8")).hexdigest()[:12],
+                "keyword": keyword,
+                "title": clean_text(row.get("予定タイトル"), keyword),
+                "category": clean_text(row.get("分類"), "予定"),
+                "is_active": 1 if bool(row.get("使用")) else 0,
+                "sort_order": safe_int(row.get("並び順"), 100),
+                "created_at": clean_text(old.get("created_at"), now_value),
+                "updated_at": now_value,
+            })
+        saved = save_handover_keywords(pd.DataFrame(rows, columns=HANDOVER_KEYWORD_COLUMNS))
+        st.success(f"予定抽出キーワード設定を保存しました。有効：{int(saved['is_active'].astype(int).sum())}件。予定候補抽出に反映されます。")
+        st.rerun()
+
+    st.markdown("#### 使用中キーワード")
+    active = load_handover_keywords(active_only=True)
+    if active.empty:
+        st.info("使用ONのキーワードはありません。")
+    else:
+        st.dataframe(active[["keyword", "title", "category", "sort_order"]].rename(columns={"keyword":"キーワード", "title":"予定タイトル", "category":"分類", "sort_order":"並び順"}), use_container_width=True, hide_index=True)
+
+
 def show_handover_schedule_export_menu():
     """申し送りから予定候補を抽出し、管理者確認後にExcel/CSVで出力する画面。"""
     if not is_admin_user():
@@ -5656,7 +5906,7 @@ def show_handover_schedule_export_menu():
         return
 
     st.subheader("申し送り予定候補の自動抽出・出力")
-    st.caption("申し送り本文から「受診」「訪問」「家族来訪」「外出」「病院」「面談」などを拾い、管理者が確認・修正してからカレンダー取込用データを出力します。")
+    st.caption("「予定抽出キーワード設定」に登録されたキーワードを使って、申し送り本文から予定候補を自動抽出します。管理者が確認・修正してから、ひだまり帳登録やカレンダー取込用データを出力します。")
 
     df = load_business_handover_data()
     if df.empty:
@@ -5673,13 +5923,20 @@ def show_handover_schedule_export_menu():
         default_start = max(valid_dates.min().date(), today_jst() - timedelta(days=30))
         default_end = valid_dates.max().date()
 
+    active_keywords_df = load_handover_keywords(active_only=True)
+    active_keywords = active_keywords_df["keyword"].tolist() if not active_keywords_df.empty else []
+    if active_keywords:
+        st.caption("現在の抽出キーワード：" + "、".join(active_keywords))
+    else:
+        st.warning("有効な予定抽出キーワードがありません。『予定抽出キーワード設定』で使用ONにしてください。")
+
     c1, c2, c3 = st.columns(3)
     with c1:
         start_date = st.date_input("抽出開始日", value=default_start, key="schedule_extract_start")
     with c2:
         end_date = st.date_input("抽出終了日", value=default_end, key="schedule_extract_end")
     with c3:
-        keyword_filter = st.text_input("本文キーワード絞り込み", placeholder="例：受診、家族、外出", key="schedule_extract_keyword")
+        keyword_filter = st.text_input("追加の本文絞り込み（任意）", placeholder="例：谷様、家族、午前", key="schedule_extract_keyword")
 
     candidates = extract_schedule_candidates_from_handover_df(df, start_date=start_date, end_date=end_date, keyword_filter=keyword_filter)
 
@@ -5840,7 +6097,7 @@ def show_business_handover_menu():
     # 確実に再描画される radio 方式に変更。
     handover_mode = st.radio(
         "表示する機能",
-        ["新規登録", "検索・更新・削除", "予定候補抽出・出力", "異常検知条件設定"],
+        ["新規登録", "検索・更新・削除", "予定候補抽出・出力", "予定抽出キーワード設定"],
         horizontal=True,
         key="business_handover_mode_radio",
     )
@@ -6270,8 +6527,8 @@ def show_business_handover_menu():
     if handover_mode == "予定候補抽出・出力":
         show_handover_schedule_export_menu()
 
-    if handover_mode == "異常検知条件設定":
-        show_alert_condition_master_menu()
+    if handover_mode == "予定抽出キーワード設定":
+        show_handover_keyword_master_menu()
 
 def show_admin_business_handover_summary(target_date):
     st.subheader("業務全体申し送り")
