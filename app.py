@@ -5135,21 +5135,26 @@ SCHEDULE_KEYWORD_RULES = [
 ]
 
 SCHEDULE_EXPORT_COLUMNS = [
+    "登録する",
     "取込対象",
     "予定ID",
     "元記録ID",
     "元日付",
     "勤務帯",
+    "利用者",
     "利用者名",
     "キーワード",
     "分類",
+    "タイトル",
     "件名",
+    "日時",
     "開始日",
     "開始時刻",
     "終了日",
     "終了時刻",
     "終日",
     "場所",
+    "詳細",
     "内容",
     "元文章",
 ]
@@ -5165,6 +5170,172 @@ GOOGLE_CALENDAR_CSV_COLUMNS = [
     "Location",
     "Private",
 ]
+
+# ひだまり帳内部カレンダー用テーブル
+SQLITE_TABLE_HIDAMARI_SCHEDULES = "hidamari_schedules"
+
+HIDAMARI_SCHEDULE_COLUMNS = [
+    "予定ID",
+    "予定日",
+    "開始時刻",
+    "終了時刻",
+    "終日",
+    "利用者名",
+    "分類",
+    "タイトル",
+    "詳細",
+    "場所",
+    "元記録ID",
+    "元日付",
+    "勤務帯",
+    "キーワード",
+    "元文章",
+    "登録日時",
+    "登録者",
+    "更新日時",
+    "更新者",
+]
+
+
+def ensure_hidamari_schedule_table():
+    """ひだまり帳内部予定テーブルを作成する。"""
+    try:
+        if not sqlite_table_exists(SQLITE_TABLE_HIDAMARI_SCHEDULES):
+            save_sqlite_table(
+                pd.DataFrame(columns=HIDAMARI_SCHEDULE_COLUMNS),
+                SQLITE_TABLE_HIDAMARI_SCHEDULES,
+                HIDAMARI_SCHEDULE_COLUMNS,
+                unique_cols=["予定ID"],
+            )
+    except Exception:
+        pass
+
+
+def load_hidamari_schedules() -> pd.DataFrame:
+    ensure_hidamari_schedule_table()
+    return load_sqlite_table(SQLITE_TABLE_HIDAMARI_SCHEDULES, HIDAMARI_SCHEDULE_COLUMNS, date_cols=["予定日", "元日付"])
+
+
+def save_hidamari_schedules(df: pd.DataFrame):
+    ensure_hidamari_schedule_table()
+    save_sqlite_table(
+        df,
+        SQLITE_TABLE_HIDAMARI_SCHEDULES,
+        HIDAMARI_SCHEDULE_COLUMNS,
+        date_cols=["予定日", "元日付"],
+        unique_cols=["予定ID"],
+        sort_cols=["予定日", "開始時刻"],
+    )
+
+
+def make_datetime_display(date_text, time_text="") -> str:
+    d = clean_text(date_text)
+    t = clean_text(time_text)
+    return f"{d} {t}".strip() if t else d
+
+
+def apply_datetime_display_to_schedule_row(row: pd.Series) -> dict:
+    """編集された日時欄を開始日・開始時刻へ反映する。"""
+    data = dict(row)
+    dt_text = clean_text(data.get("日時"))
+    if dt_text:
+        m = re.search(r"(20\d{2})[-/\.](\d{1,2})[-/\.](\d{1,2})(?:\s+(\d{1,2})[:：](\d{2}))?", dt_text)
+        if m:
+            try:
+                d = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+                data["開始日"] = d.strftime("%Y-%m-%d")
+                data["終了日"] = d.strftime("%Y-%m-%d")
+                if m.group(4) is not None:
+                    h = safe_int(m.group(4), 0)
+                    mi = safe_int(m.group(5), 0)
+                    data["開始時刻"] = f"{h:02d}:{mi:02d}"
+                    if not clean_text(data.get("終了時刻")):
+                        data["終了時刻"] = calc_schedule_end_time(data["開始時刻"], 60)
+                    data["終日"] = "FALSE"
+                else:
+                    data["開始時刻"] = clean_text(data.get("開始時刻"))
+                    data["終日"] = "FALSE" if clean_text(data.get("開始時刻")) else "TRUE"
+            except Exception:
+                pass
+    # 表示用の編集列を正式列へ同期
+    data["取込対象"] = bool(data.get("登録する", data.get("取込対象", True)))
+    data["利用者名"] = clean_text(data.get("利用者"), clean_text(data.get("利用者名")))
+    data["件名"] = clean_text(data.get("タイトル"), clean_text(data.get("件名"), "予定"))
+    data["内容"] = clean_text(data.get("詳細"), clean_text(data.get("内容")))
+    return data
+
+
+def normalize_schedule_editor_df(edited_df: pd.DataFrame) -> pd.DataFrame:
+    if edited_df is None or edited_df.empty:
+        return pd.DataFrame(columns=SCHEDULE_EXPORT_COLUMNS)
+    rows = [apply_datetime_display_to_schedule_row(row) for _, row in edited_df.iterrows()]
+    work = pd.DataFrame(rows)
+    for col in SCHEDULE_EXPORT_COLUMNS:
+        if col not in work.columns:
+            work[col] = ""
+    # 日時欄も再整形しておく
+    work["日時"] = work.apply(lambda r: make_datetime_display(r.get("開始日"), r.get("開始時刻")), axis=1)
+    work["登録する"] = work["取込対象"].astype(str).str.lower().isin(["true", "1", "yes", "対象", "取込", "取込対象"])
+    return work[SCHEDULE_EXPORT_COLUMNS].copy()
+
+
+def filter_selected_schedule_rows(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame(columns=SCHEDULE_EXPORT_COLUMNS)
+    work = normalize_schedule_editor_df(df)
+    return work[work["登録する"].astype(str).str.lower().isin(["true", "1", "yes", "対象", "取込", "取込対象"])].copy()
+
+
+def register_schedules_to_hidamari(candidate_df: pd.DataFrame) -> tuple[int, int]:
+    """選択された予定候補を、ひだまり帳内部予定DBへ登録・更新する。戻り値は（登録更新件数, 対象件数）。"""
+    selected = filter_selected_schedule_rows(candidate_df)
+    if selected.empty:
+        return 0, 0
+
+    existing = load_hidamari_schedules()
+    if existing is None or existing.empty:
+        existing = pd.DataFrame(columns=HIDAMARI_SCHEDULE_COLUMNS)
+    else:
+        existing = existing.copy()
+
+    # 同じ予定IDは更新扱いにする
+    ids = set(selected["予定ID"].map(clean_text).tolist())
+    existing = existing[~existing["予定ID"].astype(str).isin(ids)].copy() if "予定ID" in existing.columns else existing
+
+    now_text = format_now_jst("%Y-%m-%d %H:%M:%S")
+    user_text = current_login_user()
+    rows = []
+    for _, row in selected.iterrows():
+        schedule_id = clean_text(row.get("予定ID")) or str(uuid.uuid4())
+        rows.append({
+            "予定ID": schedule_id,
+            "予定日": clean_text(row.get("開始日")),
+            "開始時刻": clean_text(row.get("開始時刻")),
+            "終了時刻": clean_text(row.get("終了時刻")),
+            "終日": clean_text(row.get("終日"), "TRUE"),
+            "利用者名": clean_text(row.get("利用者名")),
+            "分類": clean_text(row.get("分類"), "予定"),
+            "タイトル": clean_text(row.get("件名"), "予定"),
+            "詳細": clean_text(row.get("内容")),
+            "場所": clean_text(row.get("場所")),
+            "元記録ID": clean_text(row.get("元記録ID")),
+            "元日付": clean_text(row.get("元日付")),
+            "勤務帯": clean_text(row.get("勤務帯")),
+            "キーワード": clean_text(row.get("キーワード")),
+            "元文章": clean_text(row.get("元文章")),
+            "登録日時": now_text,
+            "登録者": user_text,
+            "更新日時": now_text,
+            "更新者": user_text,
+        })
+    add_df = pd.DataFrame(rows, columns=HIDAMARI_SCHEDULE_COLUMNS)
+    out = pd.concat([existing, add_df], ignore_index=True)
+    save_hidamari_schedules(out)
+    try:
+        add_audit_log("ひだまり帳予定登録", SQLITE_TABLE_HIDAMARI_SCHEDULES, "", f"申し送り予定候補から{len(add_df)}件を登録・更新")
+    except Exception:
+        pass
+    return len(add_df), len(selected)
 
 
 def split_handover_lines(text_value: str) -> list:
@@ -5349,21 +5520,26 @@ def extract_schedule_candidates_from_handover_df(df: pd.DataFrame, start_date=No
                 subject = build_schedule_candidate_subject(rule, user_name)
                 all_day = "TRUE" if not start_time else "FALSE"
                 rows.append({
+                    "登録する": True,
                     "取込対象": True,
                     "予定ID": make_schedule_candidate_id(record_id, line, rule["keyword"], candidate_idx),
                     "元記録ID": record_id,
                     "元日付": pd.to_datetime(record_date, errors="coerce").strftime("%Y-%m-%d") if not pd.isna(pd.to_datetime(record_date, errors="coerce")) else "",
                     "勤務帯": shift,
+                    "利用者": user_name,
                     "利用者名": user_name,
                     "キーワード": rule["keyword"],
                     "分類": rule.get("category", "予定"),
+                    "タイトル": subject,
                     "件名": subject,
+                    "日時": make_datetime_display(schedule_date.strftime("%Y-%m-%d"), start_time),
                     "開始日": schedule_date.strftime("%Y-%m-%d"),
                     "開始時刻": start_time,
                     "終了日": schedule_date.strftime("%Y-%m-%d"),
                     "終了時刻": end_time,
                     "終日": all_day,
                     "場所": "",
+                    "詳細": f"申し送りから抽出：{line}",
                     "内容": f"申し送りから抽出：{line}",
                     "元文章": line,
                 })
@@ -5378,7 +5554,7 @@ def convert_to_google_calendar_csv_df(candidate_df: pd.DataFrame) -> pd.DataFram
     if candidate_df is None or candidate_df.empty:
         return pd.DataFrame(columns=GOOGLE_CALENDAR_CSV_COLUMNS)
 
-    work = candidate_df.copy()
+    work = filter_selected_schedule_rows(candidate_df)
     if "取込対象" in work.columns:
         work = work[work["取込対象"].astype(str).str.lower().isin(["true", "1", "yes", "対象", "取込", "取込対象"])]
     if work.empty:
@@ -5446,45 +5622,57 @@ def show_handover_schedule_export_menu():
     st.success(f"予定候補を {len(candidates)} 件抽出しました。必要に応じて修正してから出力してください。")
     st.caption("時刻が読み取れない予定は『終日予定』として出力されます。時刻が分かる場合は開始時刻・終了時刻を手入力してください。")
 
+    editor_source = candidates.copy()
+    editor_source["登録する"] = True
+    editor_source["日時"] = editor_source.apply(lambda r: make_datetime_display(r.get("開始日"), r.get("開始時刻")), axis=1)
+    editor_source["利用者"] = editor_source["利用者名"]
+    editor_source["タイトル"] = editor_source["件名"]
+    editor_source["詳細"] = editor_source["内容"]
+
     edited = st.data_editor(
-        candidates,
+        editor_source,
         use_container_width=True,
         hide_index=True,
         num_rows="dynamic",
+        column_order=["登録する", "日時", "利用者", "分類", "タイトル", "詳細", "場所", "予定ID", "元日付", "勤務帯", "キーワード", "元文章"],
         column_config={
-            "取込対象": st.column_config.CheckboxColumn("取込対象"),
-            "開始日": st.column_config.TextColumn("開始日（YYYY-MM-DD）"),
-            "開始時刻": st.column_config.TextColumn("開始時刻（HH:MM）"),
-            "終了日": st.column_config.TextColumn("終了日（YYYY-MM-DD）"),
-            "終了時刻": st.column_config.TextColumn("終了時刻（HH:MM）"),
-            "終日": st.column_config.SelectboxColumn("終日", options=["TRUE", "FALSE"]),
-            "件名": st.column_config.TextColumn("件名"),
+            "登録する": st.column_config.CheckboxColumn("登録する"),
+            "日時": st.column_config.TextColumn("日時（例：2026-05-27 14:00）"),
+            "利用者": st.column_config.TextColumn("利用者"),
+            "分類": st.column_config.SelectboxColumn("分類", options=["医療", "医療・介護", "家族", "家族・相談", "外出", "生活", "予定", "その他"]),
+            "タイトル": st.column_config.TextColumn("タイトル"),
+            "詳細": st.column_config.TextColumn("詳細"),
             "場所": st.column_config.TextColumn("場所"),
-            "内容": st.column_config.TextColumn("内容"),
         },
-        disabled=["予定ID", "元記録ID", "元日付", "勤務帯", "キーワード", "分類", "元文章"],
+        disabled=["予定ID", "元日付", "勤務帯", "キーワード", "元文章"],
         key="schedule_candidate_editor",
     )
 
-    target_df = edited.copy()
-    if "取込対象" in target_df.columns:
-        target_df = target_df[target_df["取込対象"].astype(str).str.lower().isin(["true", "1", "yes", "対象", "取込", "取込対象"])]
-
+    normalized_edited = normalize_schedule_editor_df(edited)
+    target_df = filter_selected_schedule_rows(normalized_edited)
     google_df = convert_to_google_calendar_csv_df(target_df)
 
-    st.markdown("#### 出力")
-    d1, d2, d3 = st.columns(3)
+    st.markdown("#### 登録・出力")
+    st.caption("まず候補一覧を確認し、必要なら日時・利用者・分類・タイトル・詳細を修正してください。チェックが入った行だけ登録・出力されます。")
+    d0, d1, d2, d3 = st.columns(4)
+    with d0:
+        if st.button("ひだまり帳へ登録", type="primary", use_container_width=True):
+            count, total = register_schedules_to_hidamari(normalized_edited)
+            if count > 0:
+                st.success(f"ひだまり帳の内部予定に {count} 件登録・更新しました。")
+            else:
+                st.warning("登録対象の予定がありません。『登録する』にチェックを入れてください。")
     with d1:
         st.download_button(
             "予定候補一覧をExcelでダウンロード",
-            data=to_excel_download(edited),
+            data=to_excel_download(normalized_edited),
             file_name=f"handover_schedule_candidates_{today_jst().strftime('%Y%m%d')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
     with d2:
         st.download_button(
-            "カレンダー取込用CSVをダウンロード",
+            "CSV出力",
             data=dataframe_to_csv_bytes(google_df),
             file_name=f"google_calendar_import_{today_jst().strftime('%Y%m%d')}.csv",
             mime="text/csv",
@@ -5492,12 +5680,22 @@ def show_handover_schedule_export_menu():
         )
     with d3:
         st.download_button(
-            "カレンダー取込用Excelをダウンロード",
+            "Excel出力",
             data=to_excel_download(google_df),
             file_name=f"google_calendar_import_{today_jst().strftime('%Y%m%d')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
+
+    st.markdown("#### ひだまり帳 内部予定一覧")
+    schedules = load_hidamari_schedules()
+    if schedules.empty:
+        st.info("内部予定はまだ登録されていません。")
+    else:
+        view = schedules.copy()
+        view["予定日_dt"] = pd.to_datetime(view["予定日"], errors="coerce")
+        view = view.sort_values(["予定日_dt", "開始時刻"], ascending=[False, True]).drop(columns=["予定日_dt"], errors="ignore")
+        st.dataframe(view.head(100), use_container_width=True, hide_index=True)
 
     with st.expander("Googleカレンダー等へ読み込む際の注意", expanded=False):
         st.markdown(
